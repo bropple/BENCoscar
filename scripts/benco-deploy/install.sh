@@ -77,6 +77,51 @@ if command -v file >/dev/null 2>&1; then
   esac
 fi
 
+# --- port conflict ---------------------------------------------------------
+# Checked BEFORE anything is installed. A bind failure at first start reports
+# only "address already in use" from a service that then crash-loops, which is a
+# needlessly obscure way to discover that the old TLS front-end is still running.
+#
+# Runs even under DRY_RUN: it only reads socket state, and being able to
+# exercise it without root is worth more than the symmetry. Without root, ss
+# omits the process name, so the holder is reported without attribution rather
+# than not reported at all.
+if command -v ss >/dev/null 2>&1; then
+  HOLDER="$(ss -ltnpH "sport = :$OSCAR_PORT" 2>/dev/null | head -1 || true)"
+  if [ -n "$HOLDER" ]; then
+    # Ignore ourselves: re-running the installer over a running service is fine.
+    if printf '%s' "$HOLDER" | grep -q 'bencoscar'; then
+      say "Port $OSCAR_PORT is held by bencoscar itself (upgrade in place)"
+    else
+      warn "Port $OSCAR_PORT is already in use:"
+      echo "    $HOLDER"
+      echo
+      if printf '%s' "$HOLDER" | grep -q 'stunnel'; then
+        # By far the most likely case: migrating off the stunnel front-end,
+        # which BENCoscar's native TLS replaces.
+        cat <<'MIGRATE'
+    That is stunnel — the old TLS front-end, which BENCoscar replaces because
+    it now terminates TLS itself. Retire it:
+
+        sudo systemctl disable --now benchat-tls
+        sudo rm -f /etc/letsencrypt/renewal-hooks/deploy/benchat-tls.sh
+
+    The second command matters as much as the first: that hook restarts the
+    stunnel service on every certificate renewal, so without removing it
+    stunnel returns months later and takes this port back.
+
+    Note the systemd unit is called benchat-tls, not stunnel — disabling
+    "stunnel4" only touches the distribution's own unit and changes nothing.
+MIGRATE
+      else
+        echo "    Stop whatever owns it, or install on a different port:"
+        echo "        sudo OSCAR_PORT=<port> HOSTNAME_FQDN=$HOSTNAME_FQDN ./install.sh"
+      fi
+      die "port $OSCAR_PORT is not free"
+    fi
+  fi
+fi
+
 say "BENCoscar install"
 echo "    hostname       : $HOSTNAME_FQDN"
 echo "    OSCAR port     : $OSCAR_PORT  (TLS, terminated by the server itself)"
@@ -184,6 +229,17 @@ ExecStart=$BIN_DST
 WorkingDirectory=$DATA_DIR
 Restart=on-failure
 RestartSec=5s
+
+# The server has been observed failing to exit on SIGTERM. Its own shutdown is
+# bounded to 5s internally, so anything past that is a goroutine that never
+# returned, and waiting is pointless. systemd's default here is 90s, which turns
+# a routine restart into a minute and a half of downtime and makes a certificate
+# renewal look like an outage. Give it a few seconds, then SIGKILL.
+#
+# The database is SQLite in WAL mode and every write is committed before the
+# request returns, so a hard kill loses nothing that was acknowledged.
+TimeoutStopSec=15s
+KillMode=mixed
 
 # The server binds a privileged-ish port only if you set one below 1024; by
 # default it does not, so it needs no capabilities at all.
