@@ -141,10 +141,13 @@ Known open items, carried over from the client-side analysis:
   believes a web API is listening, and silence would leave that belief intact.
   Note `server/webapi/` is still compiled and still runs upstream's tests; only
   the wiring in `main.go` is gone, which keeps the sync diff minimal.
-- **Device removal is not durable.** A device removed from a BENCchat account
-  re-publishes itself on next sign-on, because there is no server-side authority
-  over the published key set. A fork-side fix is plausible and is one of the
-  better reasons this fork exists.
+- ~~Device removal is not durable.~~ **Fixed server-side** by the device key
+  directory, foodgroup `0xBE00` — see [`docs/BENCO_KEYDIR.md`](docs/BENCO_KEYDIR.md).
+  Revocation leaves a tombstone and publishing refuses revoked keys, so a removed
+  machine can no longer republish itself. This was the single best reason the
+  fork exists: it is the one problem that genuinely needed server authority.
+  **BENCchat still has to be wired to use it** — until then the client publishes
+  via profile markers and none of this takes effect.
 - Credentials, keys and tokens are **never** committed, and never written to a
   file in the repo — not even in a test fixture.
 

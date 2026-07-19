@@ -416,6 +416,12 @@ func (s OServiceService) HostOnline(service uint16) wire.SNACMessage {
 					wire.Invite,
 					wire.Popup,
 					wire.Stats,
+					// BENCO addition. This list is how a client discovers the
+					// key directory: 0xBE00 sits above wire.MDir, so it cannot
+					// take part in the bounded foodgroup-version negotiation,
+					// and a client that does not see it here must fall back to
+					// the old profile-marker scheme. See wire/benco_keydir.go.
+					wire.BENCOKeyDir,
 				},
 			},
 		}

@@ -1753,6 +1753,12 @@ func TestOServiceService_HostOnline(t *testing.T) {
 						wire.Invite,
 						wire.Popup,
 						wire.Stats,
+						// BENCO addition. Advertising the key directory here is the ONLY
+						// way a client learns the server supports it: 0xBE00 sits above
+						// wire.MDir, so it cannot use foodgroup version negotiation. If
+						// this assertion is ever "fixed" by deleting the entry, clients
+						// silently fall back to the old profile-marker scheme.
+						wire.BENCOKeyDir,
 					},
 				},
 			},

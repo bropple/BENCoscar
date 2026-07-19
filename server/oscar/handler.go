@@ -33,6 +33,9 @@ type ResponseWriter interface {
 type Handler struct {
 	AdminService
 	BARTService
+	// BENCO addition — device key directory, foodgroup 0xBE00. The interface
+	// and the handler methods live in benco_keydir.go.
+	BENCOKeyDirService
 	BuddyService
 	ChatNavService
 	ChatService
@@ -1057,6 +1060,16 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 			return rt.AdminInfoChangeRequest(ctx, instance, inFrame, r, rw)
 		case wire.AdminInfoQuery:
 			return rt.AdminInfoQuery(ctx, instance, inFrame, r, rw)
+		}
+	// BENCO addition — device key directory. See benco_keydir.go.
+	case wire.BENCOKeyDir:
+		switch inFrame.SubGroup {
+		case wire.BENCOKeyDirPublishRequest:
+			return rt.BENCOKeyDirPublishRequest(ctx, instance, inFrame, r, rw)
+		case wire.BENCOKeyDirQueryRequest:
+			return rt.BENCOKeyDirQueryRequest(ctx, instance, inFrame, r, rw)
+		case wire.BENCOKeyDirRevokeRequest:
+			return rt.BENCOKeyDirRevokeRequest(ctx, instance, inFrame, r, rw)
 		}
 	case wire.Alert:
 		switch inFrame.SubGroup {

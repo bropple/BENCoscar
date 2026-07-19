@@ -81,7 +81,10 @@ func MakeCommonDeps() (Container, error) {
 	c.chatSessionManager = state.NewInMemoryChatSessionManager(c.logger)
 	c.webAPISessionManager = state.NewWebAPISessionManager()
 	c.rateLimitClasses = wire.DefaultRateLimitClasses()
-	c.snacRateLimits = wire.DefaultSNACRateLimits()
+	// BENCO: register the key directory's rate classes. RateParamsQuery replies
+	// by iterating every registered pair, and clients silently fail when they
+	// expect a rate rule the server never sends.
+	c.snacRateLimits = wire.WithBENCOKeyDirRateLimits(wire.DefaultSNACRateLimits())
 
 	c.feedbagSvc = foodgroup.NewFeedbagService(
 		c.logger,
@@ -317,6 +320,8 @@ func OSCAR(deps Container) *oscar.Server {
 	userLookupService := foodgroup.NewUserLookupService(deps.sqLiteUserStore)
 	statsService := foodgroup.NewStatsService()
 	oDirService := foodgroup.NewODirService(logger, deps.sqLiteUserStore)
+	// BENCO addition — device key directory, foodgroup 0xBE00.
+	bencoKeyDirService := foodgroup.NewBENCOKeyDirService(logger, deps.sqLiteUserStore)
 
 	if err := deps.sqLiteUserStore.ClearBuddyListRegistry(context.Background()); err != nil {
 		panic(err)
@@ -330,20 +335,21 @@ func OSCAR(deps Container) *oscar.Server {
 		logger,
 		oServiceService,
 		oscar.Handler{
-			AdminService:      adminService,
-			BARTService:       bartService,
-			BuddyService:      buddyService,
-			ChatNavService:    chatNavService,
-			ChatService:       chatService,
-			FeedbagService:    deps.feedbagSvc,
-			ICBMService:       deps.icbmSvc,
-			ICQService:        deps.icqService,
-			LocateService:     locateService,
-			ODirService:       oDirService,
-			OServiceService:   oServiceService,
-			PermitDenyService: permitDenyService,
-			StatsService:      statsService,
-			UserLookupService: userLookupService,
+			AdminService:       adminService,
+			BARTService:        bartService,
+			BENCOKeyDirService: bencoKeyDirService,
+			BuddyService:       buddyService,
+			ChatNavService:     chatNavService,
+			ChatService:        chatService,
+			FeedbagService:     deps.feedbagSvc,
+			ICBMService:        deps.icbmSvc,
+			ICQService:         deps.icqService,
+			LocateService:      locateService,
+			ODirService:        oDirService,
+			OServiceService:    oServiceService,
+			PermitDenyService:  permitDenyService,
+			StatsService:       statsService,
+			UserLookupService:  userLookupService,
 			RouteLogger: oscarmiddleware.RouteLogger{
 				Logger: logger,
 			},
