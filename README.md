@@ -1,4 +1,24 @@
-# Open OSCAR Server
+# BENCoscar
+
+> **This is a fork.** BENCoscar is a fork of
+> [mk6i/open-oscar-server](https://github.com/mk6i/open-oscar-server), forked at
+> tag `v0.24.0`. Nearly all of this code — and all of the documentation below —
+> is mk6i's work, used under the MIT licence. Enormous credit to them; if what
+> you want is an OSCAR server, **use the upstream project, not this one.**
+>
+> BENCoscar exists to serve [BENCchat](https://github.com/bropple/BENCchat), a
+> self-hosted end-to-end-encrypted messenger that uses OSCAR as its transport.
+> Changes here serve that goal, not classic AIM/ICQ compatibility.
+> **Bug reports about OSCAR server behaviour belong upstream**, where they reach
+> the person who actually wrote it.
+>
+> The BENCO delta over upstream is always exactly
+> `git log --oneline upstream/main..benco`. See [`CLAUDE.md`](CLAUDE.md) for fork
+> policy and [`AGENTS.md`](AGENTS.md) for upstream's architecture guide.
+>
+> Badges and links below point at the **upstream** project.
+
+---
 
 <div align="center">
 

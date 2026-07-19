@@ -1,0 +1,57 @@
+# BENCO CI.
+#
+# This is a SEPARATE workflow from upstream's `go.yml` on purpose. Upstream's
+# only triggers on `main`, so it never fires on our `benco` branch — leaving it
+# untouched means it never conflicts on a rebase, which is the fork discipline
+# in CLAUDE.md ("new files rebase almost free").
+#
+# Same checks as upstream, minus the Codecov upload (that needs a token tied to
+# mk6i's account, and a coverage number for a fork is not interesting).
+
+name: BENCO CI
+
+on:
+  push:
+    branches: ["benco"]
+  pull_request:
+    branches: ["benco"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # Tracks the toolchain in go.mod rather than pinning separately, so a
+          # future upstream Go bump doesn't need an edit here too.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Go Format
+        run: |
+          gofmt -s -l .
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then exit 1; fi
+
+      - name: GolangCI-Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -v ./...
+
+      # Upstream's suite is the regression net for the ~95% of this codebase we
+      # did not write. It stays green; never delete a test to make a change pass.
+      - name: Test
+        run: go test -race ./...

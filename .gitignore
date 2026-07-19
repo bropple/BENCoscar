@@ -6,3 +6,21 @@ dist/
 certs/
 .vscode/
 .cursor/
+
+# --- BENCO additions ---
+
+# Deployment specifics: server address, VPS details, account notes.
+# Deliberately untracked — this repo is public and the address is not
+# something to publish. See CLAUDE.md.
+DEPLOYMENT.local.md
+
+# Database backups (upstream already ignores *.db and *.sqlite themselves)
+*.sqlite.backup-*
+*.db.backup-*
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Local scratch work — never committed
+scratch/
+*.local
