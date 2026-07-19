@@ -1,6 +1,7 @@
 package state
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -53,9 +54,39 @@ func TestUser_HashPassword(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name:      "AIM password too long",
+			// BENCO widened the bounds to 8-128, so upstream's 21-character
+			// "too long" fixture is now valid. Kept as a passing case rather
+			// than deleted: a passphrase is exactly what the wider ceiling
+			// exists to allow, so this is the behaviour worth asserting.
+			name:      "AIM passphrase is accepted",
 			user:      User{IsICQ: false},
 			password:  "thispasswordistoolong",
+			wantError: false,
+		},
+		{
+			name:      "AIM password one under the minimum",
+			user:      User{IsICQ: false},
+			password:  "1234567",
+			wantError: true,
+		},
+		{
+			name:      "AIM password at the minimum",
+			user:      User{IsICQ: false},
+			password:  "12345678",
+			wantError: false,
+		},
+		{
+			name:      "AIM password at the maximum",
+			user:      User{IsICQ: false},
+			password:  strings.Repeat("a", 128),
+			wantError: false,
+		},
+		{
+			// The ceiling bounds work done on an unauthenticated request:
+			// without it a huge input would make the server hash megabytes.
+			name:      "AIM password over the maximum",
+			user:      User{IsICQ: false},
+			password:  strings.Repeat("a", 129),
 			wantError: true,
 		},
 		{

@@ -515,12 +515,34 @@ func (u *User) HashPassword(passwd string) error {
 	return nil
 }
 
+// Password length bounds.
+//
+// BENCO widened these from upstream's 4-16, which reflected AOL's validation
+// rules circa 2000 and is actively counterproductive now. The maximum was the
+// real problem: 16 characters rules out passphrases, which are the cheapest way
+// for a person to reach real entropy, and no key derivation function saves a
+// password that is too short to begin with. Capping length while spending 19 MiB
+// of argon2 on every verification is protecting the wrong end.
+//
+// 128 is a ceiling rather than a limit anyone should meet; it exists so a
+// pathological input cannot make the server hash megabytes on an unauthenticated
+// request. 8 is a floor that rules out the passwords that fall to a wordlist in
+// seconds.
+//
+// Widening is safe for existing accounts. These bounds are checked only when a
+// password is SET, and verification reads the parameters from the stored hash,
+// so an account created under the old rules keeps working — it simply cannot be
+// reset to something shorter than 8.
+const (
+	minPasswordLen = 8
+	maxPasswordLen = 128
+)
+
 // validateAIMPassword returns an error if the AIM password is invalid.
-// A valid password is 4-16 characters long. The min and max password length
-// values reflect AOL's password validation rules circa 2000.
 func validateAIMPassword(pass string) error {
-	if len(pass) < 4 || len(pass) > 16 {
-		return fmt.Errorf("%w: password length must be between 4-16 characters", ErrPasswordInvalid)
+	if len(pass) < minPasswordLen || len(pass) > maxPasswordLen {
+		return fmt.Errorf("%w: password length must be between %d-%d characters",
+			ErrPasswordInvalid, minPasswordLen, maxPasswordLen)
 	}
 	return nil
 }

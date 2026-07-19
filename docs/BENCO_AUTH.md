@@ -82,6 +82,26 @@ A BUCP client gets `LoginErrInvalidUsernameOrPassword`. That subcode is not
 literally accurate — OSCAR has no "unsupported auth method" code — but it is one
 every client renders. The real reason is logged server-side at WARN.
 
+## Password length
+
+**8 to 128 characters.** Upstream allows 4 to 16, reflecting AOL's rules circa
+2000.
+
+The old maximum was the real problem. Sixteen characters rules out passphrases,
+which are the cheapest way for a person to reach real entropy, and no key
+derivation function rescues a password that was too short to begin with —
+capping length while spending 19 MiB of argon2 on every verification protects
+the wrong end. 128 is a ceiling rather than a target: it exists so a pathological
+input cannot make the server hash megabytes on an unauthenticated request.
+
+Widening is safe for existing accounts. The bounds are checked only when a
+password is **set**, and verification reads its parameters from the stored hash,
+so an account created under the old rules keeps working — it simply cannot be
+reset to something shorter than 8.
+
+ICQ accounts (numeric UINs) keep upstream's 6-8 character rule, which comes from
+what old ICQ clients could send. BENCO does not use them.
+
 ## The hash format
 
 Hashes are stored in PHC string format:

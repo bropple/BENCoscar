@@ -1055,7 +1055,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 					accountManagerSetUserPasswordParams: accountManagerSetUserPasswordParams{
 						{
 							screenName: state.NewIdentScreenName("me"),
-							password:   "newpass",
+							password:   "newpass1",
 						},
 					},
 					accountManagerUserParams: accountManagerUserParams{
@@ -1063,7 +1063,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
 								user := &state.User{}
-								assert.NoError(t, user.HashPassword("oldpass"))
+								assert.NoError(t, user.HashPassword("oldpass1"))
 								return user
 							}(),
 						},
@@ -1079,8 +1079,8 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 				Body: wire.SNAC_0x07_0x04_AdminInfoChangeRequest{
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
-							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass"),
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass1"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
@@ -1109,7 +1109,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 					accountManagerSetUserPasswordParams: accountManagerSetUserPasswordParams{
 						{
 							screenName: state.NewIdentScreenName("me"),
-							password:   "newpass",
+							password:   "newpass1",
 							err:        state.ErrPasswordInvalid,
 						},
 					},
@@ -1118,7 +1118,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
 								user := &state.User{}
-								assert.NoError(t, user.HashPassword("oldpass"))
+								assert.NoError(t, user.HashPassword("oldpass1"))
 								return user
 							}(),
 						},
@@ -1134,8 +1134,8 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 				Body: wire.SNAC_0x07_0x04_AdminInfoChangeRequest{
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
-							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass"),
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass1"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
@@ -1165,7 +1165,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 					accountManagerSetUserPasswordParams: accountManagerSetUserPasswordParams{
 						{
 							screenName: state.NewIdentScreenName("me"),
-							password:   "newpass",
+							password:   "newpass1",
 							err:        io.EOF,
 						},
 					},
@@ -1174,7 +1174,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
 								user := &state.User{}
-								assert.NoError(t, user.HashPassword("oldpass"))
+								assert.NoError(t, user.HashPassword("oldpass1"))
 								return user
 							}(),
 						},
@@ -1190,8 +1190,8 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 				Body: wire.SNAC_0x07_0x04_AdminInfoChangeRequest{
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
-							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass"),
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass1"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
@@ -1223,7 +1223,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
 								user := &state.User{}
-								assert.NoError(t, user.HashPassword("oldpass"))
+								assert.NoError(t, user.HashPassword("oldpass1"))
 								return user
 							}(),
 						},
@@ -1240,7 +1240,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
 							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpassbad"),
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
@@ -1284,8 +1284,8 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 				Body: wire.SNAC_0x07_0x04_AdminInfoChangeRequest{
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
-							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass"),
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass1"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
@@ -1329,8 +1329,8 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 				Body: wire.SNAC_0x07_0x04_AdminInfoChangeRequest{
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
-							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass"),
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVOldPassword, "oldpass1"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
@@ -1365,7 +1365,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 				Body: wire.SNAC_0x07_0x04_AdminInfoChangeRequest{
 					TLVRestBlock: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
-							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass"),
+							wire.NewTLVBE(wire.AdminTLVNewPassword, "newpass1"),
 						},
 					},
 				},
