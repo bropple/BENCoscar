@@ -19,6 +19,20 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// BENCO: every case below binds its OWN port block.
+//
+// Upstream had all five cases share :1088. The cases run sequentially and each
+// starts a real listener, so when a previous case's server had not released the
+// port yet the next one failed to bind — the POST then reached nothing, the
+// handler never ran, and the failure surfaced as an unmet mock expectation
+// rather than as "address already in use". Rare locally, but `go test -race
+// ./...` runs packages concurrently and CI hardware is slower, which widened the
+// window enough to redden the build at random.
+//
+// Distinct ports per case is a mitigation, not a cure: the real fix is binding
+// port 0 and reading the assigned address back, which needs the test to use
+// net.Listen + srv.Serve instead of srv.ListenAndServe, since the latter never
+// exposes the port. Worth doing upstream rather than carrying here.
 func TestKerberosLoginHandler(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -34,7 +48,7 @@ func TestKerberosLoginHandler(t *testing.T) {
 			name: "successful login with single listener",
 			listeners: []config.Listener{
 				{
-					KerberosListenAddress:  ":1088",
+					KerberosListenAddress:  ":1188",
 					BOSAdvertisedHostPlain: "localhost:5190",
 				},
 			},
@@ -64,11 +78,11 @@ func TestKerberosLoginHandler(t *testing.T) {
 			name: "successful login with multiple listeners",
 			listeners: []config.Listener{
 				{
-					KerberosListenAddress:  ":1088",
+					KerberosListenAddress:  ":1288",
 					BOSAdvertisedHostPlain: "localhost:5190",
 				},
 				{
-					KerberosListenAddress:  ":1089",
+					KerberosListenAddress:  ":1289",
 					BOSAdvertisedHostPlain: "localhost:5191",
 				},
 			},
@@ -98,15 +112,15 @@ func TestKerberosLoginHandler(t *testing.T) {
 			name: "successful login with three listeners",
 			listeners: []config.Listener{
 				{
-					KerberosListenAddress:  ":1088",
+					KerberosListenAddress:  ":1388",
 					BOSAdvertisedHostPlain: "localhost:5190",
 				},
 				{
-					KerberosListenAddress:  ":1089",
+					KerberosListenAddress:  ":1389",
 					BOSAdvertisedHostPlain: "localhost:5191",
 				},
 				{
-					KerberosListenAddress:  ":1090",
+					KerberosListenAddress:  ":1390",
 					BOSAdvertisedHostPlain: "localhost:5192",
 				},
 			},
@@ -150,7 +164,7 @@ func TestKerberosLoginHandler(t *testing.T) {
 			name: "invalid request SNAC type",
 			listeners: []config.Listener{
 				{
-					KerberosListenAddress:  ":1088",
+					KerberosListenAddress:  ":1488",
 					BOSAdvertisedHostPlain: "localhost:5190",
 				},
 			},
@@ -171,7 +185,7 @@ func TestKerberosLoginHandler(t *testing.T) {
 			name: "login runtime error",
 			listeners: []config.Listener{
 				{
-					KerberosListenAddress:  ":1088",
+					KerberosListenAddress:  ":1588",
 					BOSAdvertisedHostPlain: "localhost:5190",
 				},
 			},
