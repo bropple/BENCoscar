@@ -1,7 +1,6 @@
 package state
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -166,13 +165,17 @@ type User struct {
 	IdentScreenName IdentScreenName
 	// DisplayScreenName is the formatted screen name.
 	DisplayScreenName DisplayScreenName
-	// AuthKey is the salt for the MD5 password hash.
-	AuthKey string
-	// StrongMD5Pass is the MD5 password hash format used by AIM v4.8-v5.9.
-	StrongMD5Pass []byte
-	// WeakMD5Pass is the MD5 password hash format used by AIM v3.5-v4.7. This
-	// hash is used to authenticate roasted passwords for AIM v1.0-v3.0.
-	WeakMD5Pass []byte
+	// PasswordHash is the argon2id hash of the user's password, in PHC string
+	// format. See password.go.
+	//
+	// BENCO replaced upstream's AuthKey/StrongMD5Pass/WeakMD5Pass trio with this
+	// single field. Those were password *equivalents*: the BUCP challenge-
+	// response handshake required the server to reproduce the client's MD5, so
+	// the stored value was itself sufficient to sign in. This one is one-way, so
+	// a stolen database no longer hands over working credentials.
+	//
+	// Empty means the account cannot authenticate at all — see VerifyPassword.
+	PasswordHash string
 	// IsICQ indicates whether the user is an ICQ account (true) or an AIM
 	// account (false).
 	IsICQ bool
@@ -439,49 +442,61 @@ func (u *User) Age(timeNow func() time.Time) uint16 {
 	}
 }
 
-// ValidateHash validates MD5-hashed passwords for BUCP auth. It handles
-// hashes used in early AIM 4.x versions ("weak" hashes) and later AIM 4.x-5.x
-// versions ("strong" hashes).
+// ValidateHash always returns false: BUCP challenge-response authentication is
+// not supported by this fork.
+//
+// BENCO removed it deliberately. BUCP is the only auth path that requires the
+// server to store a value it can use to reproduce the client's hash — that is, a
+// password equivalent — and keeping it would negate the point of hashing
+// passwords with a one-way KDF at all. Every other path receives the cleartext
+// password (directly, or after undoing the reversible "roasting" XOR) and can
+// verify it against an argon2id hash instead.
+//
+// The method is kept rather than deleted so upstream's BUCP call sites still
+// compile, minimising the diff against upstream. Callers should reject BUCP
+// before reaching here; foodgroup/auth.go does, with an explicit error.
 func (u *User) ValidateHash(md5Hash []byte) bool {
-	return bytes.Equal(u.StrongMD5Pass, md5Hash) || bytes.Equal(u.WeakMD5Pass, md5Hash)
+	return false
+}
+
+// verify reports whether cleartext matches the stored argon2id hash. It is the
+// single point every remaining auth path funnels through.
+func (u *User) verify(cleartext []byte) bool {
+	return VerifyPassword(u.PasswordHash, string(cleartext))
 }
 
 // ValidateRoastedPass validates roasted passwords for FLAP auth.
+//
+// "Roasting" is a reversible XOR against a fixed table, not encryption, so
+// undoing it yields the cleartext password — which is why this path can use a
+// one-way hash where BUCP cannot.
 func (u *User) ValidateRoastedPass(roastedPass []byte) bool {
-	clearPass := wire.RoastOSCARPassword(roastedPass)
-	md5Hash := wire.WeakMD5PasswordHash(string(clearPass), u.AuthKey)
-	return bytes.Equal(u.WeakMD5Pass, md5Hash)
+	return u.verify(wire.RoastOSCARPassword(roastedPass))
 }
 
 // ValidateRoastedJavaPass validates roasted passwords for the Java AIM client FLAP auth.
 func (u *User) ValidateRoastedJavaPass(roastedPass []byte) bool {
-	clearPass := wire.RoastOSCARJavaPassword(roastedPass)
-	md5Hash := wire.WeakMD5PasswordHash(string(clearPass), u.AuthKey)
-	return bytes.Equal(u.WeakMD5Pass, md5Hash)
+	return u.verify(wire.RoastOSCARJavaPassword(roastedPass))
 }
 
 // ValidateRoastedTOCPass validates roasted passwords for TOC auth.
 func (u *User) ValidateRoastedTOCPass(roastedPass []byte) bool {
-	clearPass := wire.RoastTOCPassword(roastedPass)
-	md5Hash := wire.WeakMD5PasswordHash(string(clearPass), u.AuthKey)
-	return bytes.Equal(u.WeakMD5Pass, md5Hash)
+	return u.verify(wire.RoastTOCPassword(roastedPass))
 }
 
-// ValidatePlaintextPass validates plaintext passwords used in Kerberos auth.
+// ValidatePlaintextPass validates plaintext passwords. This is the path BENCchat
+// uses, carrying the password in TLV 0x1339 over TLS.
 func (u *User) ValidatePlaintextPass(plaintextPass []byte) bool {
-	md5Hash := wire.WeakMD5PasswordHash(string(plaintextPass), u.AuthKey)
-	return bytes.Equal(u.WeakMD5Pass, md5Hash)
+	return u.verify(plaintextPass)
 }
 
 // ValidateRoastedKerberosPass validates roasted passwords used in Kerberos auth.
 func (u *User) ValidateRoastedKerberosPass(roastedPass []byte) bool {
-	clearPass := wire.RoastKerberosPassword(roastedPass)
-	md5Hash := wire.WeakMD5PasswordHash(string(clearPass), u.AuthKey)
-	return bytes.Equal(u.WeakMD5Pass, md5Hash)
+	return u.verify(wire.RoastKerberosPassword(roastedPass))
 }
 
-// HashPassword computes MD5 hashes of the user's password. It computes both
-// weak and strong variants and stores them in the struct.
+// HashPassword validates the password's length and stores its argon2id hash on
+// the struct.
 func (u *User) HashPassword(passwd string) error {
 	if u.IsICQ {
 		if err := validateICQPassword(passwd); err != nil {
@@ -492,8 +507,11 @@ func (u *User) HashPassword(passwd string) error {
 			return err
 		}
 	}
-	u.WeakMD5Pass = wire.WeakMD5PasswordHash(passwd, u.AuthKey)
-	u.StrongMD5Pass = wire.StrongMD5PasswordHash(passwd, u.AuthKey)
+	hash, err := NewPasswordHash(passwd)
+	if err != nil {
+		return err
+	}
+	u.PasswordHash = hash
 	return nil
 }
 

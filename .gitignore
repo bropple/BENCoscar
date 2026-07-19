@@ -24,3 +24,4 @@ DEPLOYMENT.local.md
 # Local scratch work — never committed
 scratch/
 *.local
+*.db-journal

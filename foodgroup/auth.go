@@ -216,63 +216,39 @@ func (s AuthService) SignoutChat(ctx context.Context, sess *state.Session) {
 // SNAC(0x17,0x07), otherwise return SNAC(0x17,0x03).
 func (s AuthService) BUCPChallenge(ctx context.Context, inBody wire.SNAC_0x17_0x06_BUCPChallengeRequest, newUUID func() uuid.UUID) (wire.SNACMessage, error) {
 
-	screenName, exists := inBody.String(wire.LoginTLVTagsScreenName)
-	if !exists {
-		s.logger.Debug("BUCPChallenge: screen name TLV not found in request")
-		return wire.SNACMessage{}, errors.New("screen name doesn't exist in tlv")
-	}
+	screenName, _ := inBody.String(wire.LoginTLVTagsScreenName)
 
-	s.logger.Debug("BUCPChallenge: received challenge request",
-		"screen_name", screenName,
-		"is_uin", state.DisplayScreenName(screenName).IsUIN())
-
-	var authKey string
-
-	user, err := s.userManager.User(ctx, state.NewIdentScreenName(screenName))
-	if err != nil {
-		s.logger.Error("BUCPChallenge: user lookup failed", "screen_name", screenName, "err", err.Error())
-		return wire.SNACMessage{}, err
-	}
-
-	switch {
-	case user != nil:
-		// user lookup succeeded
-		authKey = user.AuthKey
-		s.logger.Debug("BUCPChallenge: user found, returning auth key",
-			"screen_name", screenName,
-			"auth_key_len", len(authKey))
-	case s.config.DisableAuth:
-		// can't find user, generate stub auth key
-		authKey = newUUID().String()
-		s.logger.Debug("BUCPChallenge: user not found, auth disabled, generating stub auth key",
-			"screen_name", screenName)
-	default:
-		// can't find user, return login error
-		s.logger.Debug("BUCPChallenge: user not found, returning error",
-			"screen_name", screenName,
-			"error_code", wire.LoginErrInvalidUsernameOrPassword)
-		return wire.SNACMessage{
-			Frame: wire.SNACFrame{
-				FoodGroup: wire.BUCP,
-				SubGroup:  wire.BUCPLoginResponse,
-			},
-			Body: wire.SNAC_0x17_0x03_BUCPLoginResponse{
-				TLVRestBlock: wire.TLVRestBlock{
-					TLVList: []wire.TLV{
-						wire.NewTLVBE(wire.LoginTLVTagsErrorSubcode, wire.LoginErrInvalidUsernameOrPassword),
-					},
-				},
-			},
-		}, nil
-	}
+	// BENCO: BUCP challenge-response is not supported by this fork.
+	//
+	// The handshake requires the server to hand the client a per-user salt and
+	// then compare an MD5 the client derives from it, which means the server has
+	// to store a value sufficient to sign in with — a password equivalent. That
+	// is the one thing argon2id storage exists to eliminate, so the flow cannot
+	// be kept without giving up the benefit.
+	//
+	// This refuses at the challenge step rather than letting the login attempt
+	// through and failing the comparison later. A client that receives a
+	// challenge reasonably believes the method is supported, and would report a
+	// wrong password instead of an unsupported client.
+	//
+	// LoginErrInvalidUsernameOrPassword is not literally accurate, but OSCAR has
+	// no "unsupported auth method" subcode and this is one every client renders.
+	// The real reason is logged server-side.
+	s.logger.WarnContext(ctx, "rejected a BUCP challenge: this server does not support "+
+		"challenge-response auth, only plaintext-over-TLS (see CLAUDE.md)",
+		"screen_name", screenName)
 
 	return wire.SNACMessage{
 		Frame: wire.SNACFrame{
 			FoodGroup: wire.BUCP,
-			SubGroup:  wire.BUCPChallengeResponse,
+			SubGroup:  wire.BUCPLoginResponse,
 		},
-		Body: wire.SNAC_0x17_0x07_BUCPChallengeResponse{
-			AuthKey: authKey,
+		Body: wire.SNAC_0x17_0x03_BUCPLoginResponse{
+			TLVRestBlock: wire.TLVRestBlock{
+				TLVList: []wire.TLV{
+					wire.NewTLVBE(wire.LoginTLVTagsErrorSubcode, wire.LoginErrInvalidUsernameOrPassword),
+				},
+			},
 		},
 	}, nil
 }
@@ -289,10 +265,15 @@ func (s AuthService) BUCPChallenge(ctx context.Context, inBody wire.SNAC_0x17_0x
 // (wire.LoginTLVTagsErrorSubcode).
 func (s AuthService) BUCPLogin(ctx context.Context, inBody wire.SNAC_0x17_0x02_BUCPLoginRequest, advertisedHost string) (wire.SNACMessage, error) {
 
-	block, err := s.login(ctx, inBody.TLVList, advertisedHost)
-	if err != nil {
-		return wire.SNACMessage{}, err
-	}
+	// BENCO: BUCP is unsupported — see BUCPChallenge for why. A well-behaved
+	// client never reaches here, because the challenge step already refused.
+	// This is the backstop for one that skips straight to the login request:
+	// without it the attempt would reach ValidateHash, which now always returns
+	// false, and fail for a reason nothing logs.
+	screenName, _ := inBody.String(wire.LoginTLVTagsScreenName)
+	s.logger.WarnContext(ctx, "rejected a BUCP login: this server does not support "+
+		"challenge-response auth, only plaintext-over-TLS (see CLAUDE.md)",
+		"screen_name", screenName)
 
 	return wire.SNACMessage{
 		Frame: wire.SNACFrame{
@@ -300,7 +281,11 @@ func (s AuthService) BUCPLogin(ctx context.Context, inBody wire.SNAC_0x17_0x02_B
 			SubGroup:  wire.BUCPLoginResponse,
 		},
 		Body: wire.SNAC_0x17_0x03_BUCPLoginResponse{
-			TLVRestBlock: block,
+			TLVRestBlock: wire.TLVRestBlock{
+				TLVList: []wire.TLV{
+					wire.NewTLVBE(wire.LoginTLVTagsErrorSubcode, wire.LoginErrInvalidUsernameOrPassword),
+				},
+			},
 		},
 	}, nil
 }

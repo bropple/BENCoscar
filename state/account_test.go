@@ -25,9 +25,11 @@ func TestNewAccountCreator(t *testing.T) {
 				assert.Equal(t, DisplayScreenName("TestUser123"), u.DisplayScreenName)
 				assert.Equal(t, NewIdentScreenName("testuser123"), u.IdentScreenName)
 				assert.False(t, u.IsICQ)
-				assert.NotEmpty(t, u.AuthKey)
-				assert.NotNil(t, u.WeakMD5Pass)
-				assert.NotNil(t, u.StrongMD5Pass)
+				// There is no longer a per-user salt to check: the salt lives
+				// inside the hash. Assert the hash exists and accepts the
+				// password it was created from.
+				assert.NotEmpty(t, u.PasswordHash)
+				assert.True(t, u.ValidatePlaintextPass([]byte("validpass123")))
 			},
 		},
 		{
@@ -39,9 +41,8 @@ func TestNewAccountCreator(t *testing.T) {
 				assert.Equal(t, DisplayScreenName("12345678"), u.DisplayScreenName)
 				assert.Equal(t, NewIdentScreenName("12345678"), u.IdentScreenName)
 				assert.True(t, u.IsICQ)
-				assert.NotEmpty(t, u.AuthKey)
-				assert.NotNil(t, u.WeakMD5Pass)
-				assert.NotNil(t, u.StrongMD5Pass)
+				assert.NotEmpty(t, u.PasswordHash)
+				assert.True(t, u.ValidatePlaintextPass([]byte("valid12")))
 			},
 		},
 		{

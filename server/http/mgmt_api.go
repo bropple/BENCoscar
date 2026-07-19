@@ -474,7 +474,10 @@ func getUserLoginHandler(w http.ResponseWriter, r *http.Request, userManager Use
 		logger.Error("error getting user", "err", err.Error())
 		return
 	}
-	if user == nil || !user.ValidateHash(wire.StrongMD5PasswordHash(password, user.AuthKey)) {
+	// BENCO: was ValidateHash(StrongMD5PasswordHash(password, user.AuthKey)).
+	// This endpoint receives the password in cleartext via HTTP Basic auth, so it
+	// verifies against the argon2id hash directly rather than reproducing an MD5.
+	if user == nil || !user.ValidatePlaintextPass([]byte(password)) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte("401 Unauthorized: Invalid Credentials\n"))
 		return

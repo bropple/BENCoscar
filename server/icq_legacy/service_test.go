@@ -929,7 +929,9 @@ func TestICQLegacyService_RegisterNewUser(t *testing.T) {
 				slog.Default(),
 			)
 
-			uin, err := svc.RegisterNewUser(context.Background(), "Nick", "First", "Last", "test@example.com", "password123")
+			// ICQ passwords must be 6-8 characters. HashPassword now enforces
+			// that on this path, so the fixture uses a compliant password.
+			uin, err := svc.RegisterNewUser(context.Background(), "Nick", "First", "Last", "test@example.com", "passw0rd")
 
 			if tc.wantErr {
 				assert.Error(t, err)
@@ -941,10 +943,22 @@ func TestICQLegacyService_RegisterNewUser(t *testing.T) {
 	}
 }
 
+// mustHashPassword returns the argon2id hash of password for use in user
+// fixtures. It calls state.NewPasswordHash directly rather than
+// (*state.User).HashPassword so that fixtures are not subject to the AIM/ICQ
+// password length rules, which are exercised separately.
+func mustHashPassword(t *testing.T, password string) string {
+	t.Helper()
+	hash, err := state.NewPasswordHash(password)
+	if err != nil {
+		t.Fatalf("hashing test password: %v", err)
+	}
+	return hash
+}
+
 func TestICQLegacyService_DeleteUser(t *testing.T) {
-	authKey := "test-auth-key"
 	password := "secret123"
-	passHash := wire.StrongMD5PasswordHash(password, authKey)
+	passHash := mustHashPassword(t, password)
 
 	tests := []struct {
 		name       string
@@ -963,8 +977,7 @@ func TestICQLegacyService_DeleteUser(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("12345"),
 							result: &state.User{
-								AuthKey:       authKey,
-								StrongMD5Pass: passHash,
+								PasswordHash: passHash,
 							},
 						},
 					},
@@ -986,8 +999,7 @@ func TestICQLegacyService_DeleteUser(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("12345"),
 							result: &state.User{
-								AuthKey:       authKey,
-								StrongMD5Pass: passHash,
+								PasswordHash: passHash,
 							},
 						},
 					},

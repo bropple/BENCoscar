@@ -1062,9 +1062,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
-								user := &state.User{
-									AuthKey: "auth_key",
-								}
+								user := &state.User{}
 								assert.NoError(t, user.HashPassword("oldpass"))
 								return user
 							}(),
@@ -1119,9 +1117,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
-								user := &state.User{
-									AuthKey: "auth_key",
-								}
+								user := &state.User{}
 								assert.NoError(t, user.HashPassword("oldpass"))
 								return user
 							}(),
@@ -1177,9 +1173,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
-								user := &state.User{
-									AuthKey: "auth_key",
-								}
+								user := &state.User{}
 								assert.NoError(t, user.HashPassword("oldpass"))
 								return user
 							}(),
@@ -1228,9 +1222,7 @@ func TestAdminService_InfoChangeRequest_Password(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("me"),
 							result: func() *state.User {
-								user := &state.User{
-									AuthKey: "auth_key",
-								}
+								user := &state.User{}
 								assert.NoError(t, user.HashPassword("oldpass"))
 								return user
 							}(),

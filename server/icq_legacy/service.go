@@ -577,9 +577,14 @@ func (s *ICQLegacyService) RegisterNewUser(ctx context.Context, nickname, firstN
 		},
 	}
 
-	// Generate auth key and password hash
-	newUser.AuthKey = uuid.New().String()
-	newUser.StrongMD5Pass = wire.StrongMD5PasswordHash(password, newUser.AuthKey)
+	// BENCO: was a UUID auth key plus a StrongMD5PasswordHash. HashPassword now
+	// derives an argon2id hash with its own random salt. It also enforces the
+	// ICQ password length rules, which this path previously skipped — a
+	// registration with an out-of-range password is now rejected rather than
+	// stored unusable.
+	if err := newUser.HashPassword(password); err != nil {
+		return 0, fmt.Errorf("hashing password for new legacy ICQ user: %w", err)
+	}
 
 	// Insert the user
 	if err := s.userManager.InsertUser(ctx, newUser); err != nil {

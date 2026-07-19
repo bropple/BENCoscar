@@ -2,8 +2,6 @@ package state
 
 import (
 	"context"
-
-	"github.com/google/uuid"
 )
 
 // CreateAccountFunc creates a new user account in the database.
@@ -31,8 +29,9 @@ func NewAccountCreator(insertUser func(ctx context.Context, u User) error) Creat
 			}
 		}
 
+		// No AuthKey: argon2id generates a fresh random salt inside each hash
+		// rather than reusing a per-user value stored beside it.
 		user := User{
-			AuthKey:           uuid.NewString(),
 			DisplayScreenName: screenName,
 			IdentScreenName:   screenName.IdentScreenName(),
 			IsICQ:             screenName.IsUIN(),

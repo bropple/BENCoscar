@@ -122,11 +122,13 @@ error rather than a silent fallback to cleartext.
 
 Known open items, carried over from the client-side analysis:
 
-- **Auth is salted MD5.** BUCP challenge-response structurally *requires* the
-  server to hold a password-equivalent, so a stronger KDF cannot simply be bolted
-  onto it. The escape route is plaintext-over-TLS plus argon2id at rest — the
-  codebase already has an `isPlaintextAuth` path. This is now unblocked (the
-  plaintext OSCAR port is closed on the live deployment) but not yet done.
+- ~~Auth is salted MD5.~~ **Done** — passwords are argon2id and BUCP is gone.
+  See [`docs/BENCO_AUTH.md`](docs/BENCO_AUTH.md). The short version: BUCP
+  challenge-response is the only auth path that structurally requires the server
+  to hold a password *equivalent*, and every other path already has the cleartext
+  in hand at verification time, so dropping BUCP is what unlocked a one-way KDF.
+  Migration `0034` is one-way: **existing accounts cannot sign in until their
+  passwords are reset** through the management API. Breaks AIM v3.5–v5.9 only.
 - **The WebAPI is removed from this fork.** `SQLiteUserStore.AuthenticateUser`
   (`state/webapi_auth.go`) does not verify passwords — it returns the user for
   any non-empty string, with a `// TODO: In production, verify password hash

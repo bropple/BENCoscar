@@ -277,7 +277,10 @@ func (s AdminService) InfoChangeRequest(ctx context.Context, instance *state.Ses
 			return getAdminChangeReply(tlvList), nil
 		}
 
-		if !u.ValidateHash(wire.StrongMD5PasswordHash(oldPass, u.AuthKey)) {
+		// BENCO: was ValidateHash(StrongMD5PasswordHash(oldPass, u.AuthKey)).
+		// The change-password flow carries the old password in cleartext, so it
+		// verifies against the argon2id hash directly.
+		if !u.ValidatePlaintextPass([]byte(oldPass)) {
 			tlvList.Append(wire.NewTLVBE(wire.AdminTLVErrorCode, wire.AdminInfoErrorValidatePassword))
 			return getAdminChangeReply(tlvList), nil
 		}

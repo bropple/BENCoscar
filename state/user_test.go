@@ -10,70 +10,71 @@ import (
 	"github.com/mk6i/open-oscar-server/wire"
 )
 
+// passwordHash returns the argon2id hash of password in PHC string format. Each
+// call produces a different string even for the same password, because the salt
+// is random — tests must therefore verify passwords rather than compare hashes.
+func passwordHash(t *testing.T, password string) string {
+	t.Helper()
+	hash, err := NewPasswordHash(password)
+	require.NoError(t, err)
+	return hash
+}
+
+// userWithPassword returns a User whose PasswordHash is the argon2id hash of
+// password. It replaces the old AuthKey/WeakMD5Pass/StrongMD5Pass fixtures.
+func userWithPassword(t *testing.T, password string) User {
+	t.Helper()
+	return User{PasswordHash: passwordHash(t, password)}
+}
+
 func TestUser_HashPassword(t *testing.T) {
 	tests := []struct {
-		name              string
-		user              User
-		password          string
-		expectedWeakMD5   []byte
-		expectedStrongMD5 []byte
-		wantError         bool
+		name      string
+		user      User
+		password  string
+		wantError bool
 	}{
 		{
-			name:              "Valid AIM password",
-			user:              User{AuthKey: "someAuthKey", IsICQ: false},
-			password:          "validPassword",
-			expectedWeakMD5:   wire.WeakMD5PasswordHash("validPassword", "someAuthKey"),
-			expectedStrongMD5: wire.StrongMD5PasswordHash("validPassword", "someAuthKey"),
-			wantError:         false,
+			name:      "Valid AIM password",
+			user:      User{IsICQ: false},
+			password:  "validPassword",
+			wantError: false,
 		},
 		{
-			name:              "Empty AIM password",
-			user:              User{AuthKey: "someAuthKey", IsICQ: false},
-			password:          "",
-			expectedWeakMD5:   nil,
-			expectedStrongMD5: nil,
-			wantError:         true,
+			name:      "Empty AIM password",
+			user:      User{IsICQ: false},
+			password:  "",
+			wantError: true,
 		},
 		{
-			name:              "AIM password too short",
-			user:              User{AuthKey: "someAuthKey", IsICQ: false},
-			password:          "abc",
-			expectedWeakMD5:   nil,
-			expectedStrongMD5: nil,
-			wantError:         true,
+			name:      "AIM password too short",
+			user:      User{IsICQ: false},
+			password:  "abc",
+			wantError: true,
 		},
 		{
-			name:              "AIM password too long",
-			user:              User{AuthKey: "someAuthKey", IsICQ: false},
-			password:          "thispasswordistoolong",
-			expectedWeakMD5:   nil,
-			expectedStrongMD5: nil,
-			wantError:         true,
+			name:      "AIM password too long",
+			user:      User{IsICQ: false},
+			password:  "thispasswordistoolong",
+			wantError: true,
 		},
 		{
-			name:              "Valid ICQ password",
-			user:              User{AuthKey: "someAuthKey", IsICQ: true},
-			password:          "validICQ",
-			expectedWeakMD5:   wire.WeakMD5PasswordHash("validICQ", "someAuthKey"),
-			expectedStrongMD5: wire.StrongMD5PasswordHash("validICQ", "someAuthKey"),
-			wantError:         false,
+			name:      "Valid ICQ password",
+			user:      User{IsICQ: true},
+			password:  "validICQ",
+			wantError: false,
 		},
 		{
-			name:              "Empty ICQ password",
-			user:              User{AuthKey: "someAuthKey", IsICQ: true},
-			password:          "",
-			expectedWeakMD5:   nil,
-			expectedStrongMD5: nil,
-			wantError:         true,
+			name:      "Empty ICQ password",
+			user:      User{IsICQ: true},
+			password:  "",
+			wantError: true,
 		},
 		{
-			name:              "ICQ password too long",
-			user:              User{AuthKey: "someAuthKey", IsICQ: true},
-			password:          "icqpass89",
-			expectedWeakMD5:   nil,
-			expectedStrongMD5: nil,
-			wantError:         true,
+			name:      "ICQ password too long",
+			user:      User{IsICQ: true},
+			password:  "icqpass89",
+			wantError: true,
 		},
 	}
 
@@ -83,11 +84,23 @@ func TestUser_HashPassword(t *testing.T) {
 
 			if tt.wantError {
 				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.expectedWeakMD5, tt.user.WeakMD5Pass)
-				assert.Equal(t, tt.expectedStrongMD5, tt.user.StrongMD5Pass)
+				return
 			}
+
+			require.NoError(t, err)
+
+			// The hash embeds a random salt, so its exact bytes can't be
+			// asserted the way the old MD5 equivalents could. Assert the
+			// properties that actually matter instead: it's a well-formed
+			// argon2id hash, and it accepts exactly the right password.
+			require.NotEmpty(t, tt.user.PasswordHash)
+			_, salt, key, err := ParsePasswordHash(tt.user.PasswordHash)
+			require.NoError(t, err)
+			assert.NotEmpty(t, salt)
+			assert.NotEmpty(t, key)
+
+			assert.True(t, tt.user.ValidatePlaintextPass([]byte(tt.password)))
+			assert.False(t, tt.user.ValidatePlaintextPass([]byte(tt.password+"wrong")))
 		})
 	}
 }
@@ -285,38 +298,28 @@ func TestUser_ValidateRoastedPass(t *testing.T) {
 		expected    bool
 	}{
 		{
-			name: "Valid roasted password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Valid roasted password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastOSCARPassword([]byte("testPassword")),
 			expected:    true,
 		},
 		{
-			name: "Invalid roasted password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Invalid roasted password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastOSCARPassword([]byte("wrongPassword")),
 			expected:    false,
 		},
 		{
-			name: "Empty roasted password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Empty roasted password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastOSCARPassword([]byte("")),
 			expected:    false,
 		},
 		{
 			name: "Empty stored password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: []byte{},
-			},
+			// No stored hash at all: VerifyPassword rejects an empty
+			// PasswordHash, so every credential must fail.
+			user:        User{},
 			roastedPass: wire.RoastOSCARPassword([]byte("testPassword")),
 			expected:    false,
 		},
@@ -338,38 +341,28 @@ func TestUser_ValidateRoastedJavaPass(t *testing.T) {
 		expected    bool
 	}{
 		{
-			name: "Valid roasted Java password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Valid roasted Java password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastOSCARJavaPassword([]byte("testPassword")),
 			expected:    true,
 		},
 		{
-			name: "Invalid roasted Java password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Invalid roasted Java password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastOSCARJavaPassword([]byte("wrongPassword")),
 			expected:    false,
 		},
 		{
-			name: "Empty roasted Java password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Empty roasted Java password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastOSCARJavaPassword([]byte("")),
 			expected:    false,
 		},
 		{
 			name: "Empty stored password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: []byte{},
-			},
+			// No stored hash at all: VerifyPassword rejects an empty
+			// PasswordHash, so every credential must fail.
+			user:        User{},
 			roastedPass: wire.RoastOSCARJavaPassword([]byte("testPassword")),
 			expected:    false,
 		},
@@ -391,38 +384,28 @@ func TestUser_ValidateRoastedTOCPass(t *testing.T) {
 		expected    bool
 	}{
 		{
-			name: "Valid roasted TOC password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Valid roasted TOC password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastTOCPassword([]byte("testPassword")),
 			expected:    true,
 		},
 		{
-			name: "Invalid roasted TOC password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Invalid roasted TOC password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastTOCPassword([]byte("wrongPassword")),
 			expected:    false,
 		},
 		{
-			name: "Empty roasted TOC password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Empty roasted TOC password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastTOCPassword([]byte("")),
 			expected:    false,
 		},
 		{
 			name: "Empty stored password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: []byte{},
-			},
+			// No stored hash at all: VerifyPassword rejects an empty
+			// PasswordHash, so every credential must fail.
+			user:        User{},
 			roastedPass: wire.RoastTOCPassword([]byte("testPassword")),
 			expected:    false,
 		},
@@ -444,47 +427,34 @@ func TestUser_ValidatePlaintextPass(t *testing.T) {
 		expected      bool
 	}{
 		{
-			name: "Valid plaintext password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:          "Valid plaintext password",
+			user:          userWithPassword(t, "testPassword"),
 			plaintextPass: []byte("testPassword"),
 			expected:      true,
 		},
 		{
-			name: "Invalid plaintext password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:          "Invalid plaintext password",
+			user:          userWithPassword(t, "testPassword"),
 			plaintextPass: []byte("wrongPassword"),
 			expected:      false,
 		},
 		{
-			name: "Empty plaintext password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:          "Empty plaintext password",
+			user:          userWithPassword(t, "testPassword"),
 			plaintextPass: []byte(""),
 			expected:      false,
 		},
 		{
 			name: "Empty stored password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: []byte{},
-			},
+			// No stored hash at all: VerifyPassword rejects an empty
+			// PasswordHash, so every credential must fail.
+			user:          User{},
 			plaintextPass: []byte("testPassword"),
 			expected:      false,
 		},
 		{
-			name: "Password with special characters",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("test@123!", "testAuthKey"),
-			},
+			name:          "Password with special characters",
+			user:          userWithPassword(t, "test@123!"),
 			plaintextPass: []byte("test@123!"),
 			expected:      true,
 		},
@@ -506,38 +476,28 @@ func TestUser_ValidateRoastedKerberosPass(t *testing.T) {
 		expected    bool
 	}{
 		{
-			name: "Valid roasted Kerberos password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Valid roasted Kerberos password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastKerberosPassword([]byte("testPassword")),
 			expected:    true,
 		},
 		{
-			name: "Invalid roasted Kerberos password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Invalid roasted Kerberos password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastKerberosPassword([]byte("wrongPassword")),
 			expected:    false,
 		},
 		{
-			name: "Empty roasted Kerberos password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: wire.WeakMD5PasswordHash("testPassword", "testAuthKey"),
-			},
+			name:        "Empty roasted Kerberos password",
+			user:        userWithPassword(t, "testPassword"),
 			roastedPass: wire.RoastKerberosPassword([]byte("")),
 			expected:    false,
 		},
 		{
 			name: "Empty stored password",
-			user: User{
-				AuthKey:     "testAuthKey",
-				WeakMD5Pass: []byte{},
-			},
+			// No stored hash at all: VerifyPassword rejects an empty
+			// PasswordHash, so every credential must fail.
+			user:        User{},
 			roastedPass: wire.RoastKerberosPassword([]byte("testPassword")),
 			expected:    false,
 		},

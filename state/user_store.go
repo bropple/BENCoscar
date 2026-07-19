@@ -629,9 +629,7 @@ func (f SQLiteUserStore) queryUsers(ctx context.Context, whereClause string, que
 			identScreenName,
 			displayScreenName,
 			emailAddress,
-			authKey,
-			strongMD5Pass,
-			weakMD5Pass,
+			passwordHash,
 			confirmStatus,
 			regStatus,
 			suspendedStatus,
@@ -734,9 +732,7 @@ func (f SQLiteUserStore) queryUsers(ctx context.Context, whereClause string, que
 			&sn,
 			&u.DisplayScreenName,
 			&u.EmailAddress,
-			&u.AuthKey,
-			&u.StrongMD5Pass,
-			&u.WeakMD5Pass,
+			&u.PasswordHash,
 			&u.ConfirmStatus,
 			&u.RegStatus,
 			&u.SuspendedStatus,
@@ -840,17 +836,15 @@ func (f SQLiteUserStore) InsertUser(ctx context.Context, u User) error {
 		return errors.New("inserting user with UIN and isICQ=false")
 	}
 	q := `
-		INSERT INTO users (identScreenName, displayScreenName, authKey, weakMD5Pass, strongMD5Pass, isICQ, isBot)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (identScreenName, displayScreenName, passwordHash, isICQ, isBot)
+		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (identScreenName) DO NOTHING
 	`
 	result, err := f.db.ExecContext(ctx,
 		q,
 		u.IdentScreenName.String(),
 		u.DisplayScreenName,
-		u.AuthKey,
-		u.WeakMD5Pass,
-		u.StrongMD5Pass,
+		u.PasswordHash,
 		u.IsICQ,
 		u.IsBot,
 	)
@@ -901,9 +895,11 @@ func (f SQLiteUserStore) SetUserPassword(ctx context.Context, screenName IdentSc
 		}
 	}()
 
+	// isICQ is still read because it selects the password length rules applied
+	// by HashPassword. The salt no longer needs fetching: argon2id generates a
+	// fresh random one per hash rather than reusing a per-user value.
 	q := `
 		SELECT
-			authKey,
 			isICQ
 		FROM users
 		WHERE identScreenName = ?
@@ -912,7 +908,6 @@ func (f SQLiteUserStore) SetUserPassword(ctx context.Context, screenName IdentSc
 	u := User{}
 
 	err = tx.QueryRowContext(ctx, q, screenName.String()).Scan(
-		&u.AuthKey,
 		&u.IsICQ,
 	)
 
@@ -926,10 +921,10 @@ func (f SQLiteUserStore) SetUserPassword(ctx context.Context, screenName IdentSc
 
 	q = `
 		UPDATE users
-		SET authKey = ?, weakMD5Pass = ?, strongMD5Pass = ?
+		SET passwordHash = ?
 		WHERE identScreenName = ?
 	`
-	result, err := tx.ExecContext(ctx, q, u.AuthKey, u.WeakMD5Pass, u.StrongMD5Pass, screenName.String())
+	result, err := tx.ExecContext(ctx, q, u.PasswordHash, screenName.String())
 	if err != nil {
 		return err
 	}

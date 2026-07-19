@@ -522,8 +522,7 @@ func TestGetUser(t *testing.T) {
 	insertedUser := &User{
 		IdentScreenName:   screenName,
 		DisplayScreenName: DisplayScreenName("testscreenname"),
-		AuthKey:           "theauthkey",
-		StrongMD5Pass:     []byte("thepasshash"),
+		PasswordHash:      passwordHash(t, "thepassword"),
 		RegStatus:         3,
 		LastWarnUpdate:    time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), // Database default value
 		ICQInfo: ICQInfo{
@@ -884,11 +883,14 @@ func TestSQLiteUserStore_SetUserPassword_UserExists(t *testing.T) {
 	gotUser, err := feedbagStore.User(context.Background(), u.IdentScreenName)
 	assert.NoError(t, err)
 
-	wantUser := User{}
-	_ = wantUser.HashPassword("theNEWpassword")
+	// The stored hash can't be compared to a freshly computed one (random
+	// salt), so verify the round-tripped hash against the new password — and
+	// confirm the old password no longer works.
+	assert.True(t, gotUser.ValidatePlaintextPass([]byte("theNEWpassword")))
+	assert.False(t, gotUser.ValidatePlaintextPass([]byte("thepassword")))
 
-	valid := gotUser.ValidateHash(wantUser.StrongMD5Pass)
-	assert.True(t, valid)
+	// BUCP is unsupported in this fork, so ValidateHash never succeeds.
+	assert.False(t, gotUser.ValidateHash([]byte("anything")))
 }
 
 func TestSQLiteUserStore_SetUserPassword_ErrNoUser(t *testing.T) {
@@ -2575,7 +2577,6 @@ func TestSQLiteUserStore_RetrieveMessages(t *testing.T) {
 		user := User{
 			IdentScreenName:   NewIdentScreenName(string(screenName)),
 			DisplayScreenName: screenName,
-			AuthKey:           uuid.New().String(),
 			IsICQ:             screenName.IsUIN(),
 		}
 		require.NoError(t, user.HashPassword("welcome1"))
@@ -2657,7 +2658,6 @@ func TestSQLiteUserStore_DeleteMessages(t *testing.T) {
 		user := User{
 			IdentScreenName:   NewIdentScreenName(string(screenName)),
 			DisplayScreenName: screenName,
-			AuthKey:           uuid.New().String(),
 			IsICQ:             screenName.IsUIN(),
 		}
 		require.NoError(t, user.HashPassword("welcome1"))
@@ -2746,7 +2746,6 @@ func TestSQLiteUserStore_SaveMessage(t *testing.T) {
 		user := User{
 			IdentScreenName:   NewIdentScreenName(string(screenName)),
 			DisplayScreenName: screenName,
-			AuthKey:           uuid.New().String(),
 			IsICQ:             screenName.IsUIN(),
 		}
 		require.NoError(t, user.HashPassword("welcome1"))
@@ -4077,8 +4076,7 @@ func TestSQLiteUserStore_UpdateSuspendedStatus(t *testing.T) {
 	insertedUser := &User{
 		IdentScreenName:   screenName,
 		DisplayScreenName: DisplayScreenName("usera"),
-		AuthKey:           "theauthkey",
-		StrongMD5Pass:     []byte("thepasshash"),
+		PasswordHash:      passwordHash(t, "thepassword"),
 		RegStatus:         3,
 		SuspendedStatus:   wire.LoginErrSuspendedAccount,
 	}
@@ -4107,8 +4105,7 @@ func TestSQLiteUserStore_SetBotStatus(t *testing.T) {
 	insertedUser := &User{
 		IdentScreenName:   screenName,
 		DisplayScreenName: DisplayScreenName("usera"),
-		AuthKey:           "theauthkey",
-		StrongMD5Pass:     []byte("thepasshash"),
+		PasswordHash:      passwordHash(t, "thepassword"),
 		IsBot:             false,
 	}
 	err = f.InsertUser(context.Background(), *insertedUser)
