@@ -68,8 +68,20 @@ git fetch upstream --tags
 git tag --sort=-creatordate | head -5     # newest releases
 git log --oneline benco..v0.25.0          # what the release contains
 git rebase v0.25.0                        # or merge, if the diff has grown
-go test -race ./...                       # non-negotiable before pushing
 ```
+
+Before pushing, run what CI runs — all of it. CI runs the linter *before* vet,
+build and test, so a lint failure skips everything else and tells you nothing
+about whether the code works:
+
+```sh
+gofmt -s -l .                             # must print nothing
+golangci-lint run ./...                   # v2.12.2, matches .golangci.yml
+go vet ./... && go test -race ./...
+```
+
+`errcheck` is on and it is stricter than habit: a bare `defer conn.Close()` in a
+test is a lint failure, not a style nit. Write `defer func() { _ = conn.Close() }()`.
 
 `git log --oneline <tag>..benco` is the inverse and always shows exactly the
 BENCO delta. Keep that list short and readable — if it stops being either, the
@@ -115,13 +127,18 @@ Known open items, carried over from the client-side analysis:
   onto it. The escape route is plaintext-over-TLS plus argon2id at rest — the
   codebase already has an `isPlaintextAuth` path. This is now unblocked (the
   plaintext OSCAR port is closed on the live deployment) but not yet done.
-- **`ENABLE_WEBAPI=1` must stay off.** `SQLiteUserStore.AuthenticateUser`
+- **The WebAPI is removed from this fork.** `SQLiteUserStore.AuthenticateUser`
   (`state/webapi_auth.go`) does not verify passwords — it returns the user for
   any non-empty string, with a `// TODO: In production, verify password hash
-  here`. It is upstream work-in-progress rather than something broken, but it
-  shipped in v0.24.0, and the WebAPI listener binds `0.0.0.0:9000` hardcoded
-  (`cmd/server/factory.go`), ignoring the listener config. Do not enable it, and
-  re-check this before ever doing so.
+  here` — and the listener binds `0.0.0.0:9000` hardcoded
+  (`cmd/server/factory.go`), ignoring the listener config. That combination is
+  an authentication bypass reachable on every interface. Upstream
+  work-in-progress rather than something broken, but it ships in v0.24.0.
+  `cmd/server/main.go` refuses to start if `ENABLE_WEBAPI` is set at all, before
+  any socket is bound, rather than ignoring it — an operator who sets it
+  believes a web API is listening, and silence would leave that belief intact.
+  Note `server/webapi/` is still compiled and still runs upstream's tests; only
+  the wiring in `main.go` is gone, which keeps the sync diff minimal.
 - **Device removal is not durable.** A device removed from a BENCchat account
   re-publishes itself on next sign-on, because there is no server-side authority
   over the published key set. A fork-side fix is plausible and is one of the

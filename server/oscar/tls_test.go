@@ -67,7 +67,7 @@ func echoOnce(t *testing.T, ln net.Listener) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		buf := make([]byte, 16)
 		n, err := conn.Read(buf)
 		if err != nil {
@@ -80,13 +80,13 @@ func echoOnce(t *testing.T, ln net.Listener) {
 func TestListenBOS_PlaintextByDefault(t *testing.T) {
 	ln, err := listenBOS(config.Listener{BOSListenAddress: "127.0.0.1:0"})
 	require.NoError(t, err)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	echoOnce(t, ln)
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	_, err = conn.Write([]byte("hello"))
 	require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestListenBOS_TLSHandshakeSucceeds(t *testing.T) {
 		TLS:              testKeypair(t),
 	})
 	require.NoError(t, err)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	echoOnce(t, ln)
 
@@ -113,7 +113,7 @@ func TestListenBOS_TLSHandshakeSucceeds(t *testing.T) {
 		InsecureSkipVerify: true,
 	})
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	require.NoError(t, conn.Handshake())
 
@@ -140,13 +140,13 @@ func TestListenBOS_PlaintextClientRejectedByTLSListener(t *testing.T) {
 		TLS:              testKeypair(t),
 	})
 	require.NoError(t, err)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	echoOnce(t, ln)
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// The TCP connect succeeds — tls.NewListener defers the handshake to the
 	// first read, so this is expected. What must not happen is the payload

@@ -11,8 +11,6 @@ import (
 
 	"github.com/joho/godotenv"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/mk6i/open-oscar-server/server/webapi"
 )
 
 var (
@@ -49,6 +47,15 @@ func init() {
 }
 
 func main() {
+	// BENCO: checked before anything binds a socket, so a misconfigured server
+	// never reaches a state where some listeners are up and the operator's
+	// expectations are half-met. See the WebAPI note below.
+	if os.Getenv("ENABLE_WEBAPI") != "" {
+		fmt.Println("ENABLE_WEBAPI is set, but the WebAPI is removed from this fork " +
+			"(it authenticates any non-empty password — see CLAUDE.md). Unset it to start.")
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -72,11 +79,21 @@ func main() {
 	toc := TOC(deps)
 	g.Go(toc.ListenAndServe)
 
-	var webAPI *webapi.Server
-	if os.Getenv("ENABLE_WEBAPI") == "1" {
-		webAPI = WebAPI(deps)
-		g.Go(webAPI.ListenAndServe)
-	}
+	// BENCO: the WebAPI server is removed from this fork and cannot be enabled.
+	//
+	// state/webapi_auth.go's AuthenticateUser returns the user for ANY non-empty
+	// password — it carries an explicit "TODO: In production, verify password
+	// hash here" — and cmd/server/factory.go binds it to 0.0.0.0:9000 hardcoded,
+	// ignoring the listener config entirely. That combination is an
+	// authentication bypass reachable on every interface. It is upstream
+	// work-in-progress rather than something broken, but it ships in v0.24.0 and
+	// BENCO has no use for it.
+	//
+	// Setting ENABLE_WEBAPI is a hard startup failure rather than a no-op: an
+	// operator who sets it believes a web API is listening, and quietly ignoring
+	// them would leave that belief intact. That check runs at the top of main,
+	// before any socket is bound. If this fork ever wants the WebAPI, the
+	// password check has to be real first.
 
 	// Start ICQ Legacy server if enabled
 	icqLegacy := ICQLegacy(deps)
@@ -91,9 +108,6 @@ func main() {
 	_ = kerb.Shutdown(shutdownCtx)
 	_ = api.Shutdown(shutdownCtx)
 	_ = toc.Shutdown(shutdownCtx)
-	if os.Getenv("ENABLE_WEBAPI") == "1" {
-		_ = webAPI.Shutdown(shutdownCtx)
-	}
 	if deps.cfg.ICQLegacy.Enabled {
 		_ = icqLegacy.Shutdown(shutdownCtx)
 	}
