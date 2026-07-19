@@ -4,6 +4,10 @@ This fork stores passwords as **argon2id** hashes and does not support **BUCP
 challenge-response** authentication. Upstream does the opposite. This document
 explains the change, what it breaks, and what an operator has to do.
 
+> **For the BENCO deployment specifically, this section is moot:** the plan is to
+> redeploy with a fresh database, so there are no pre-existing rows to migrate.
+> It matters only if you point this server at a database created by upstream.
+
 ## ⚠️ Existing accounts must have their passwords reset
 
 Migration `0034_argon2id_passwords` drops the old MD5 columns and adds an empty

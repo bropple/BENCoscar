@@ -53,5 +53,20 @@ jobs:
 
       # Upstream's suite is the regression net for the ~95% of this codebase we
       # did not write. It stays green; never delete a test to make a change pass.
+      #
+      # -timeout is raised from Go's 10-minute default because the state package
+      # is genuinely slow, and was already slow before BENCO touched it. It
+      # builds a real SQLite database — running every migration — close to a
+      # hundred times, and it is I/O-bound rather than CPU-bound: a local run
+      # measured 578s wall for only 386s of user time, the rest being fsync wait.
+      #
+      # 578s against a 600s default is why this went red. The margin was always
+      # razor thin; argon2id added enough to cross it. The failure presents as an
+      # opaque "exit code 1" with no mention of a timeout, which is worth knowing
+      # before debugging the wrong thing.
+      #
+      # Measure on a real filesystem if you re-check this. The same suite runs in
+      # 341s from /tmp, because /tmp is tmpfs and the fsyncs become free — which
+      # makes tmpfs timings useless for predicting CI.
       - name: Test
-        run: go test -race ./...
+        run: go test -race -timeout 40m ./...
