@@ -57,16 +57,26 @@ These rules exist to keep syncing with upstream cheap. mk6i is very active
 The `upstream` remote points at mk6i's repo; `origin` is ours. The working branch
 is `benco`.
 
+**Sync at upstream RELEASES, not at `main`.** Tags land every 6–10 weeks with
+roughly 40–50 commits each (`v0.22.0` Jan 30, `v0.23.0` Mar 24, `v0.24.0` Jun 6,
+2026), so this means about six syncs a year against a settled core, each landing
+on a revision upstream considered shippable. Chasing `main` means rebasing onto
+whatever half-finished state the webapi work is in that week, for no benefit.
+
 ```sh
-git fetch upstream
-git log --oneline benco..upstream/main    # what's new
-git rebase upstream/main                  # or merge, if the diff has grown
-go test ./...                             # non-negotiable before pushing
+git fetch upstream --tags
+git tag --sort=-creatordate | head -5     # newest releases
+git log --oneline benco..v0.25.0          # what the release contains
+git rebase v0.25.0                        # or merge, if the diff has grown
+go test -race ./...                       # non-negotiable before pushing
 ```
 
-`git log --oneline upstream/main..benco` is the inverse and always shows exactly
-the BENCO delta. Keep that list short and readable — if it stops being either,
-the fork discipline above has slipped.
+`git log --oneline <tag>..benco` is the inverse and always shows exactly the
+BENCO delta. Keep that list short and readable — if it stops being either, the
+fork discipline above has slipped.
+
+Pin the deployment to the tag the fork is based on, so "which upstream are we
+running" is always answerable.
 
 Watch `server/webapi/` in particular: mk6i is building an HTTP/JSON access layer
 there, which overlaps with things BENCO might otherwise build itself. Check
