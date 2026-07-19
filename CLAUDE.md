@@ -92,6 +92,12 @@ BENCchat does end-to-end encryption **client-side** — the server never sees
 plaintext message bodies and must never need to. Anything added here that would
 require the server to read message content is the wrong design, not a shortcut.
 
+**Native TLS is implemented** — see [`docs/BENCO_TLS.md`](docs/BENCO_TLS.md).
+Setting `OSCAR_TLS_CERT_FILE` and `OSCAR_TLS_KEY_FILE` makes every OSCAR listener
+a TLS listener, with no plaintext port in existence. Leaving them unset
+reproduces upstream's stunnel model exactly. Half-configured TLS is a startup
+error rather than a silent fallback to cleartext.
+
 Known open items, carried over from the client-side analysis:
 
 - **Auth is salted MD5.** BUCP challenge-response structurally *requires* the
@@ -99,6 +105,13 @@ Known open items, carried over from the client-side analysis:
   onto it. The escape route is plaintext-over-TLS plus argon2id at rest — the
   codebase already has an `isPlaintextAuth` path. This is now unblocked (the
   plaintext OSCAR port is closed on the live deployment) but not yet done.
+- **`ENABLE_WEBAPI=1` must stay off.** `SQLiteUserStore.AuthenticateUser`
+  (`state/webapi_auth.go`) does not verify passwords — it returns the user for
+  any non-empty string, with a `// TODO: In production, verify password hash
+  here`. It is upstream work-in-progress rather than something broken, but it
+  shipped in v0.24.0, and the WebAPI listener binds `0.0.0.0:9000` hardcoded
+  (`cmd/server/factory.go`), ignoring the listener config. Do not enable it, and
+  re-check this before ever doing so.
 - **Device removal is not durable.** A device removed from a BENCchat account
   re-publishes itself on next sign-on, because there is no server-side authority
   over the published key set. A fork-side fix is plausible and is one of the

@@ -86,7 +86,9 @@ type Server struct {
 
 func (s *Server) ListenAndServe() error {
 	for _, listenCfg := range s.listenerCfg {
-		ln, err := net.Listen("tcp", listenCfg.BOSListenAddress)
+		// BENCO: listenBOS returns a TLS listener when the deployment
+		// terminates TLS natively, and a plain one otherwise. See tls.go.
+		ln, err := listenBOS(listenCfg)
 		if err != nil {
 			s.cleanupListeners()
 			s.shutdownCancel()
@@ -96,6 +98,9 @@ func (s *Server) ListenAndServe() error {
 		args := []any{
 			"listen_address", listenCfg.BOSListenAddress,
 			"advertised_host_plain", listenCfg.BOSAdvertisedHostPlain,
+			// Logged unconditionally so an operator can tell at a glance
+			// whether the port they just opened is encrypted.
+			"native_tls", listenCfg.UsesTLS(),
 		}
 		if listenCfg.HasSSL {
 			args = append(args, "advertised_host_ssl", listenCfg.BOSAdvertisedHostSSL)
@@ -219,7 +224,10 @@ func (s oscarServer) routeConnection(ctx context.Context, conn net.Conn, listene
 		return s.connectToOSCARService(ctx, flap, flapc, conn, listener)
 	}
 
-	return s.authenticate(ctx, flap, ip, conn, flapc, listener.BOSAdvertisedHostPlain)
+	// BENCO: was listener.BOSAdvertisedHostPlain unconditionally, which told a
+	// client that had just connected over TLS to reconnect to a plaintext
+	// address. AdvertisedHost keeps that behaviour when native TLS is off.
+	return s.authenticate(ctx, flap, ip, conn, flapc, listener.AdvertisedHost())
 }
 
 func (s oscarServer) connectToOSCARService(

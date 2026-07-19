@@ -38,6 +38,12 @@ type Listener struct {
 	BOSAdvertisedHostSSL   string
 	KerberosListenAddress  string
 	HasSSL                 bool
+	// TLS is the BENCO native-TLS config, copied onto every listener by
+	// ParseListenersCfg. It lives here rather than being threaded separately
+	// because config.Listener is already passed down to every place that needs
+	// to know how a connection arrived — the accept loop and the two advertised
+	// -host decisions. See config/tls.go.
+	TLS TLSConfig
 }
 
 //go:generate go run ../cmd/config_generator unix settings.env ssl
@@ -56,6 +62,11 @@ type Config struct {
 
 	// ICQ Legacy Protocol Configuration
 	ICQLegacy ICQLegacyConfig
+
+	// TLS configures native TLS termination for the OSCAR listeners (BENCO
+	// addition — see config/tls.go). Unset means upstream behaviour: plaintext
+	// sockets, with TLS terminated by an external stunnel if at all.
+	TLS TLSConfig
 }
 
 // ICQLegacyConfig holds configuration for legacy ICQ protocol support (v2-v5)
@@ -219,6 +230,11 @@ func (c *Config) ParseListenersCfg() ([]Listener, error) {
 		case v.BOSListenAddress == "":
 			return nil, fmt.Errorf("missing BOS listen address for listener `%s://`", k)
 		}
+		// BENCO: native TLS is server-wide rather than per-listener — every
+		// OSCAR socket is encrypted or none is. Copying it onto each listener
+		// keeps the accept loop and the advertised-host logic reading a single
+		// value they already hold, instead of reaching back up to Config.
+		v.TLS = c.TLS
 		ret = append(ret, *v)
 	}
 

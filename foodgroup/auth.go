@@ -642,6 +642,17 @@ func (s AuthService) loginSuccessResponse(props loginProperties, advertisedHost 
 	reconnectHost := advertisedHost
 	sslState := wire.OServiceServiceResponseSSLStateNotUsed
 
+	// BENCO: sslState was hardcoded to NotUsed here, so the initial login
+	// response always claimed the session was unencrypted even when it wasn't.
+	// Under the stunnel model that was merely inaccurate — the client had
+	// dialled the TLS port itself and knew better. Under native TLS it is
+	// actively wrong: it invites the client to reconnect in plaintext to a port
+	// that does not exist. The advertised host is chosen by the caller
+	// (config.Listener.AdvertisedHost); this only has to agree with it.
+	if s.config.TLS.Enabled() {
+		sslState = wire.OServiceServiceResponseSSLStateResume
+	}
+
 	s.logger.Debug("loginSuccessResponse: returning login response",
 		"screen_name", props.screenName,
 		"reconnect_host", reconnectHost,

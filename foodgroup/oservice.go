@@ -648,7 +648,18 @@ func (s OServiceService) ServiceRequest(ctx context.Context, service uint16, ins
 	host := listener.BOSAdvertisedHostPlain
 	stateCode := wire.OServiceServiceResponseSSLStateNotUsed
 
-	if inBody.HasTag(wire.OserviceTLVTagsSSLUseSSL) {
+	switch {
+	// BENCO: with native TLS the socket is encrypted whether or not the client
+	// thought to ask, so every service redirect — BOS reconnect and chat room
+	// alike — stays on TLS. Checked first because a client that also sends the
+	// use-SSL tag must not fall through to the stunnel branch below, which
+	// would hand it BOSAdvertisedHostSSL: under native TLS that names a
+	// separate stunnel port which this deployment does not run.
+	case listener.UsesTLS():
+		host = listener.AdvertisedHost()
+		stateCode = wire.OServiceServiceResponseSSLStateResume
+
+	case inBody.HasTag(wire.OserviceTLVTagsSSLUseSSL):
 		host = listener.BOSAdvertisedHostSSL
 		stateCode = wire.OServiceServiceResponseSSLStateResume
 	}
