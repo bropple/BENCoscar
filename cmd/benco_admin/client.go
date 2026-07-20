@@ -4,20 +4,34 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // defaultAPIAddr mirrors config.APIListener's default in config/config.go.
 //
-// The management API binds to loopback because it has no authentication of its
-// own (see the note in printUsage). Defaulting the client to loopback keeps the
-// common case -- running on the server, or through an SSH tunnel -- a no-op, and
-// makes talking to anything else an explicit, visible choice.
-const defaultAPIAddr = "127.0.0.1:8080"
+// A unix socket rather than a loopback port, because the socket is what
+// authenticates the management API: it lives in a directory only the admin
+// group can traverse, so the kernel refuses everyone else before the server
+// reads a byte. There is no token in this scheme -- membership of the group IS
+// the credential.
+const defaultAPIAddr = "unix:/run/bencoscar/mgmt.sock"
+
+// unixPrefix marks an --api value as a socket path rather than a host:port.
+const unixPrefix = "unix:"
+
+// unixHostPlaceholder stands in for the host in URLs sent over a unix socket. A
+// unix connection has no hostname, but net/http still needs a syntactically
+// valid URL and puts the value in the Host header, so it has to be something
+// stable and self-evidently not a real name.
+const unixHostPlaceholder = "bencoscar-mgmt.invalid"
 
 // requestTimeout is generous because account creation runs argon2id server-side,
 // which deliberately costs ~19 MiB and real milliseconds per hash.
@@ -26,11 +40,33 @@ const requestTimeout = 30 * time.Second
 type apiClient struct {
 	baseURL string
 	token   string
-	http    *http.Client
+	// socketPath is set when talking over a unix socket, and is used to explain
+	// a permission failure in terms of the socket rather than of a URL.
+	socketPath string
+	http       *http.Client
 }
 
 func newAPIClient(addr string, token string) *apiClient {
 	base := strings.TrimSpace(addr)
+
+	if path, ok := unixSocketPath(base); ok {
+		return &apiClient{
+			// The path travels in the transport's dialer, not in the URL.
+			baseURL:    "http://" + unixHostPlaceholder,
+			token:      token,
+			socketPath: path,
+			http: &http.Client{
+				Timeout: requestTimeout,
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						var d net.Dialer
+						return d.DialContext(ctx, "unix", path)
+					},
+				},
+			},
+		}
+	}
+
 	if !strings.Contains(base, "://") {
 		base = "http://" + base
 	}
@@ -39,6 +75,42 @@ func newAPIClient(addr string, token string) *apiClient {
 		token:   token,
 		http:    &http.Client{Timeout: requestTimeout},
 	}
+}
+
+// unixSocketPath recognises the unix: form of an --api value, tolerating the
+// unix:// spelling for anyone who reaches for URL syntax out of habit.
+func unixSocketPath(addr string) (string, bool) {
+	if !strings.HasPrefix(addr, unixPrefix) {
+		return "", false
+	}
+	path := strings.TrimPrefix(strings.TrimPrefix(addr, unixPrefix), "//")
+	if path == "" {
+		return "", false
+	}
+	return path, true
+}
+
+// connectionError explains a transport failure in terms of the thing the
+// operator configured. Over a unix socket the two failures worth telling apart
+// are "the server is not running" and "you may not open this socket", which the
+// stdlib renders as near-identical noise wrapped around a URL that is not even
+// a real address.
+func (c *apiClient) connectionError(err error) error {
+	if c.socketPath == "" {
+		return fmt.Errorf("contacting management API at %s: %w", c.baseURL, err)
+	}
+	if isPermissionDenied(err) {
+		return notInGroupError(c.socketPath, adminGroupName())
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("no management socket at %s -- the server does not appear to be running. "+
+			"Check `systemctl status bencoscar`, or point elsewhere with --api", c.socketPath)
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("the management socket %s exists but nothing is listening on it, which usually "+
+			"means the server stopped without cleaning up. Check `systemctl status bencoscar`", c.socketPath)
+	}
+	return fmt.Errorf("contacting management API over %s: %w", c.socketPath, err)
 }
 
 // apiError carries the server's own message rather than a generic one, so an
@@ -84,7 +156,7 @@ func (c *apiClient) do(ctx context.Context, method string, path string, reqBody 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("contacting management API at %s: %w", c.baseURL, err)
+		return c.connectionError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 

@@ -100,6 +100,20 @@ involved.
 The Management API provides functionality for administering the server (see [OpenAPI spec](./api.yml)). The following
 shows you how to run these commands via the command line.
 
+> **BENCO fork:** this API has no authentication of any kind — anything that can
+> reach it can create accounts, delete them and reset any password. This fork
+> therefore defaults `API_LISTENER` to a **unix socket**
+> (`unix:/run/bencoscar/mgmt.sock`), where filesystem permissions do the
+> authenticating: only members of the `bencoscar-admin` group can connect, and
+> there is no address to expose by accident. Prefer `benco_admin`
+> (`cmd/benco_admin`) over `curl`, or add
+> `--unix-socket /run/bencoscar/mgmt.sock` to the examples below.
+>
+> A `HOST:PORT` value still works. A **non-loopback** one now refuses to start
+> unless `API_ALLOW_NONLOOPBACK=true` is set alongside it, so widening the API is
+> a deliberate act rather than a typo. See
+> [`scripts/benco-deploy/README.md`](./scripts/benco-deploy/README.md).
+
 ### Windows PowerShell
 
 > Run these commands from **PowerShell**, *not* **Command Prompt**.

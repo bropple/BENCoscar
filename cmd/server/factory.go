@@ -401,7 +401,7 @@ func MgmtAPI(deps Container) *http.Server {
 	)
 	return http.NewManagementAPI(
 		bld,
-		deps.cfg.APIListener,
+		deps.cfg.APIConfig(),
 		deps.sqLiteUserStore,        // userManager
 		deps.inMemorySessionManager, // sessionRetriever
 		buddyService,

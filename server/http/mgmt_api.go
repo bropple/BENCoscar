@@ -24,7 +24,7 @@ import (
 	"github.com/mk6i/open-oscar-server/wire"
 )
 
-func NewManagementAPI(bld config.Build, listener string, userManager UserManager, sessionRetriever SessionRetriever, buddyBroadcaster BuddyBroadcaster, chatRoomRetriever ChatRoomRetriever, chatRoomCreator ChatRoomCreator, chatRoomDeleter ChatRoomDeleter, chatSessionRetriever ChatSessionRetriever, directoryManager DirectoryManager, messageRelayer MessageRelayer, bartAssetManager BARTAssetManager, feedbagRetriever FeedBagRetriever, feedbagManager FeedbagManager, accountManager AccountManager, profileRetriever ProfileRetriever, webAPIKeyManager WebAPIKeyManager, icqProfileManager ICQProfileManager, createAccount state.CreateAccountFunc, logger *slog.Logger) *Server {
+func NewManagementAPI(bld config.Build, apiCfg config.APIConfig, userManager UserManager, sessionRetriever SessionRetriever, buddyBroadcaster BuddyBroadcaster, chatRoomRetriever ChatRoomRetriever, chatRoomCreator ChatRoomCreator, chatRoomDeleter ChatRoomDeleter, chatSessionRetriever ChatSessionRetriever, directoryManager DirectoryManager, messageRelayer MessageRelayer, bartAssetManager BARTAssetManager, feedbagRetriever FeedBagRetriever, feedbagManager FeedbagManager, accountManager AccountManager, profileRetriever ProfileRetriever, webAPIKeyManager WebAPIKeyManager, icqProfileManager ICQProfileManager, createAccount state.CreateAccountFunc, logger *slog.Logger) *Server {
 	mux := http.NewServeMux()
 
 	// Handlers for '/user' route
@@ -184,22 +184,46 @@ func NewManagementAPI(bld config.Build, listener string, userManager UserManager
 
 	return &Server{
 		server: http.Server{
-			Addr:    listener,
-			Handler: mux,
+			Addr:    apiCfg.Listener,
+			Handler: auditLogger(mux, logger),
+			// Capture the peer's kernel-supplied credentials while the raw
+			// connection is still reachable, so handlers can attribute actions.
+			ConnContext: connContext,
 		},
+		cfg:    apiCfg,
 		logger: logger,
 	}
 }
 
 type Server struct {
 	server http.Server
+	// cfg holds the raw API_LISTENER value and its companions. The listener is
+	// parsed at ListenAndServe time rather than here, so that construction
+	// cannot fail.
+	cfg    config.APIConfig
 	logger *slog.Logger
 }
 
 func (s *Server) ListenAndServe() error {
-	s.logger.Info("starting server", "addr", s.server.Addr)
+	spec, err := config.ParseAPIListener(s.cfg.Listener)
+	if err != nil {
+		return err
+	}
 
-	if err := s.server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+	ln, err := listen(spec, s.cfg, s.logger)
+	if err != nil {
+		return err
+	}
+
+	switch spec.Kind {
+	case config.APIListenerUnix:
+		s.logger.Info("starting server", "socket", spec.Address, "mode", socketMode.String(),
+			"auth", "unix file permissions")
+	default:
+		s.logger.Info("starting server", "addr", spec.Address, "auth", "none (loopback bind only)")
+	}
+
+	if err := s.server.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("unable to start management API server: %w", err)
 	}
 

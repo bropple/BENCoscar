@@ -76,25 +76,75 @@ would sit on disk unused until the old one expired and clients started failing.
 ## Accounts
 
 `DISABLE_AUTH=false`, so accounts must be provisioned before anyone can sign in.
-The management API is loopback-only:
 
 ```bash
 # on the VPS
-curl -X POST http://127.0.0.1:8080/user \
-  -H 'Content-Type: application/json' \
-  -d '{"screen_name":"someone","password":"their-password"}'
-
-# or from your workstation
-ssh -L 8080:localhost:8080 <vps>
+benco_admin user add someone
+benco_admin user list
 ```
 
 Passwords are stored as argon2id. There is no way to recover one — reset it:
 
 ```bash
-curl -X PUT http://127.0.0.1:8080/user/password \
-  -H 'Content-Type: application/json' \
-  -d '{"screen_name":"someone","password":"a-new-password"}'
+benco_admin user passwd someone
 ```
+
+`benco_admin` never takes a password as an argument (argv is visible in `ps` and
+lands in shell history); it prompts, or reads stdin when stdin is a pipe.
+
+### Who is allowed to do this
+
+The management API has no authentication of its own — no token, no password.
+Instead it listens on a unix socket, and the filesystem decides who may connect:
+
+```
+/run/bencoscar             0750  bencoscar:bencoscar-admin   traverse
+/run/bencoscar/mgmt.sock   0660  bencoscar:bencoscar-admin   connect
+```
+
+The kernel refuses anyone outside `bencoscar-admin` before the server reads a
+byte. There is nothing to leak, nothing to rotate, and no bind address to get
+wrong — the API cannot be exposed to the network by editing an environment
+variable, because it has no address.
+
+The **directory** mode is the load-bearing part. Go creates unix sockets with
+`0777 &~ umask` and can only `chmod` them after binding, so for an instant the
+socket itself is world-writable; a directory nobody outside the group can
+traverse means that instant does not matter.
+
+Each link in the chain is established by a different component:
+
+| What | By whom |
+| --- | --- |
+| `bencoscar-admin` exists; the admin is a member | `install.sh` (`groupadd`, `usermod -aG`) |
+| `/run/bencoscar` exists at `0750`, removed on stop | systemd `RuntimeDirectory=` / `RuntimeDirectoryMode=` |
+| The server is *in* the group, so it can hand the socket over | systemd `SupplementaryGroups=` |
+| Directory and socket given to the group; socket set `0660` | the server at startup, from `API_SOCKET_GROUP` |
+| `AF_UNIX` permitted at all | systemd `RestrictAddressFamilies=` |
+
+Grant someone access:
+
+```bash
+sudo usermod -aG bencoscar-admin <user>
+```
+
+They must then log out and back in. Group membership is fixed when a process
+starts and inherited from its parent, so a shell that was already running never
+picks it up — and no command run *inside* that shell can change that, which is
+why the installer cannot do it for you. `benco_admin` detects this case (in the
+group per `/etc/group`, but absent from `os.Getgroups()`) and transparently
+re-runs itself under `sg`, printing one line when it does. Everything else will
+report permission denied until the next login.
+
+### Still want a TCP port?
+
+`API_LISTENER=127.0.0.1:8080` still works, reached through a tunnel
+(`ssh -L 8080:localhost:8080 <vps>`), and `benco_admin --api 127.0.0.1:8080`
+will talk to it. Two things change over TCP: there are no peer credentials, so
+the audit log records actions as `peer_uid=unknown`; and a **non-loopback** bind
+now refuses to start unless `API_ALLOW_NONLOOPBACK=true` is set alongside it.
+That is deliberate — a typo in a bind address should not be able to publish an
+unauthenticated "reset any password" endpoint.
 
 ## Starting the database over
 

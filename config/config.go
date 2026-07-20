@@ -53,7 +53,9 @@ type Config struct {
 	BOSAdvertisedHostsSSL   []string `envconfig:"OSCAR_ADVERTISED_LISTENERS_SSL" required:"false" basic:"" ssl:"LOCAL://ras.dev:5193" description:"Same as OSCAR_ADVERTISED_LISTENERS_PLAIN, except the hostname is for the server that terminates SSL."`
 	KerberosListeners       []string `envconfig:"KERBEROS_LISTENERS" required:"false" basic:"" ssl:"LOCAL://0.0.0.0:1088" description:"Network listeners for Kerberos authentication. See OSCAR_LISTENERS doc for more details.\n\nExamples:\n\t// Listen on all interfaces\n\tLAN://0.0.0.0:1088\n\t// Separate Internet and LAN config\n\tWAN://142.250.176.206:1088,LAN://192.168.1.10:1087"`
 	TOCListeners            []string `envconfig:"TOC_LISTENERS" required:"true" basic:"0.0.0.0:9898" ssl:"0.0.0.0:9898" description:"Network listeners for TOC protocol service.\n\nFormat: Comma-separated list of hostname:port pairs.\n\nExamples:\n\t// All interfaces\n\t0.0.0.0:9898\n\t// Multiple listeners\n\t0.0.0.0:9898,192.168.1.10:9899"`
-	APIListener             string   `envconfig:"API_LISTENER" required:"true" basic:"127.0.0.1:8080" ssl:"127.0.0.1:8080" description:"Network listener for management API binds to. Only 1 listener can be specified. (Default 127.0.0.1 restricts to same machine only)."`
+	APIListener             string   `envconfig:"API_LISTENER" required:"true" basic:"unix:/run/bencoscar/mgmt.sock" ssl:"unix:/run/bencoscar/mgmt.sock" description:"Listener the management API binds to. Only 1 listener can be specified.\n\nFormat:\n\t- unix:/PATH/TO.sock for a unix domain socket (RECOMMENDED)\n\t- HOST:PORT for a TCP bind\n\nThe management API has NO authentication of its own: anything that can reach it has full administrative control, including creating accounts and resetting any password. A unix socket makes the filesystem the authentication -- the kernel refuses a connection before the server reads a byte, there is no token to leak or rotate, and a socket path cannot be typo'd onto the network.\n\nSet API_SOCKET_GROUP alongside this when using a socket. Without it the socket keeps the service account's own group, so only that account and root may administer the server -- which is secure but grants nothing to the operators you meant to grant it to.\n\nA TCP bind still works, but a non-loopback one requires API_ALLOW_NONLOOPBACK=true, so that exposing the API is a deliberate act rather than an editing accident.\n\nExamples:\n\t// Unix socket (recommended)\n\tunix:/run/bencoscar/mgmt.sock\n\t// Loopback TCP\n\t127.0.0.1:8080"`
+	APISocketGroup          string   `envconfig:"API_SOCKET_GROUP" required:"false" basic:"" ssl:"" description:"Unix group permitted to administer this server through the management socket. Ignored unless API_LISTENER names a unix socket.\n\nThe server gives the socket and its directory to this group at startup, which is what makes group membership the credential for administration -- there is nothing else to hold. The server must itself be a member of the group to be able to hand it over; under systemd that means SupplementaryGroups=.\n\nLeft empty, the socket keeps the service account's own group, which means only that account and root may administer the server.\n\nExample:\n\tbencoscar-admin"`
+	APIAllowNonLoopback     bool     `envconfig:"API_ALLOW_NONLOOPBACK" required:"false" basic:"false" ssl:"false" description:"Permit API_LISTENER to bind a TCP address reachable from off this machine. The server refuses to start otherwise, because the management API has no authentication of its own and a non-loopback bind hands full administrative control to whoever can route to it. Only set this when something else -- an authenticating reverse proxy, or a network only trusted operators can reach -- supplies the access control the API does not."`
 
 	DBPath                 string `envconfig:"DB_PATH" required:"true" basic:"oscar.sqlite" ssl:"oscar.sqlite" description:"The path to the SQLite database file. The file and DB schema are auto-created if they doesn't exist."`
 	DisableAuth            bool   `envconfig:"DISABLE_AUTH" required:"true" basic:"true" ssl:"true" description:"Disable password check and auto-create new users at login time. Useful for quickly creating new accounts during development without having to register new users via the management API."`
@@ -267,23 +269,27 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate APIListener (format: hostname:port pair, no scheme)
-	apiListener := strings.TrimSpace(c.APIListener)
-	if apiListener == "" {
-		return fmt.Errorf("APIListener is required and cannot be empty")
-	}
-
-	host, port, err := net.SplitHostPort(apiListener)
+	// Validate APIListener: either unix:/PATH/TO.sock or HOST:PORT.
+	spec, err := ParseAPIListener(c.APIListener)
 	if err != nil {
-		return fmt.Errorf("invalid API listener %q: %v. Valid format: HOST:PORT (e.g., 127.0.0.1:8080)", c.APIListener, err)
+		return err
 	}
 
-	if host == "" {
-		return fmt.Errorf("invalid API listener %q: missing host. Valid format: HOST:PORT (e.g., 127.0.0.1:8080)", c.APIListener)
-	}
-
-	if port == "" {
-		return fmt.Errorf("invalid API listener %q: missing port. Valid format: HOST:PORT (e.g., 127.0.0.1:8080)", c.APIListener)
+	// A non-loopback management API is not a configuration this server will
+	// adopt by accident. The API authenticates nobody, so binding it to a
+	// routable address is equivalent to publishing an unauthenticated "reset
+	// any password" endpoint -- which is a decision, not a default.
+	if spec.Kind == APIListenerTCP && !spec.Loopback && !c.APIAllowNonLoopback {
+		return fmt.Errorf("refusing to start: API listener %q is reachable from off this machine. "+
+			"The management API has NO authentication of its own -- anything that can connect to it can "+
+			"create accounts, delete them, reset any password and disconnect any session. Either use a "+
+			"unix socket, which makes filesystem permissions the authentication:\n"+
+			"\tAPI_LISTENER=unix:/run/bencoscar/mgmt.sock\n"+
+			"or keep it on loopback and reach it through an SSH tunnel:\n"+
+			"\tAPI_LISTENER=127.0.0.1:8080\n"+
+			"If something else is genuinely providing access control (an authenticating reverse proxy, "+
+			"or a network only trusted operators can reach), say so explicitly with "+
+			"API_ALLOW_NONLOOPBACK=true", c.APIListener)
 	}
 
 	return nil

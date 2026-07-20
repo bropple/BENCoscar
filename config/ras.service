@@ -5,9 +5,42 @@ Description=Open OSCAR Server
 Type=simple
 User=ras
 Group=ras
+# ras-admin is the group that may administer this server. Membership in it IS
+# the credential -- there is nothing else to hold, no token and no password:
+#
+#   groupadd --system ras-admin
+#   usermod -aG ras-admin <your-user>   # then log out and back in
+#
+# It is a SUPPLEMENTARY group, and that distinction matters. Setting
+# Group=ras-admin would make it the service's PRIMARY group, so everything the
+# server writes -- the SQLite database included -- would be created owned by it.
+# Administrators would then have direct filesystem access to password hashes and
+# identity backups, bypassing the management API and its audit log entirely.
+# Supplementary membership grants only what is needed: the right to hand the
+# socket to that group, since a process may chgrp only to a group it is in.
+SupplementaryGroups=ras-admin
 WorkingDirectory=/opt/ras
 StateDirectory=ras
-Environment="API_LISTENER=127.0.0.1:8080"
+# systemd creates /run/ras before the server starts, owned by User and Group
+# above. The server then chgrps this directory AND the socket to the admin
+# group -- see server/http/listener.go -- which is why the unit does not need to
+# name that group here.
+#
+# The directory IS the management API's authentication: 0750 means only root,
+# ras, and the ras-admin group can traverse into it and reach the socket.
+#
+# It also closes the window in which the socket itself is world-writable: Go
+# creates unix sockets with 0777 &~ umask and can only chmod them after binding,
+# so the socket's own mode must not be the thing being relied on.
+RuntimeDirectory=ras
+RuntimeDirectoryMode=0750
+# AF_UNIX because the management API is a unix socket. This unit sets no
+# RestrictAddressFamilies= today, so nothing is blocked -- but if hardening is
+# ever added here, omitting AF_UNIX makes the server start, serve OSCAR happily,
+# and fail to bind the management socket with a permission error that looks like
+# a filesystem problem and is not.
+Environment="API_SOCKET_GROUP=ras-admin"
+Environment="API_LISTENER=unix:/run/ras/mgmt.sock"
 Environment="OSCAR_ADVERTISED_LISTENERS_PLAIN=EXTERNAL://127.0.0.1:5190"
 Environment="OSCAR_LISTENERS=EXTERNAL://0.0.0.0:5190"
 Environment="TOC_LISTENERS=0.0.0.0:9898"

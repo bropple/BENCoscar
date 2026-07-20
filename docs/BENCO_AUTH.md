@@ -16,12 +16,13 @@ what "one-way" means — so every pre-existing account has no usable credential
 after migrating and **cannot sign in** until its password is set again:
 
 ```sh
-curl -X PUT http://127.0.0.1:8080/user/password \
-  -H 'Content-Type: application/json' \
-  -d '{"screen_name": "someone", "password": "their-new-password"}'
+benco_admin user passwd someone
 ```
 
-(The management API is loopback-only; reach it over an SSH tunnel.)
+(The management API listens on a unix socket owned by the `bencoscar-admin`
+group, and membership of that group is what authorises this — so run it on the
+server, as a member. See
+[`scripts/benco-deploy/README.md`](../scripts/benco-deploy/README.md).)
 
 This is deliberate, not an oversight. The alternative — keeping the MD5 columns
 as a fallback — would preserve exactly the exposure the change exists to remove.

@@ -22,6 +22,13 @@ import (
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
+		// The command already ran, in a child process that had the admin group
+		// this one lacked. It has printed whatever it had to print; all that is
+		// left is to wear its exit status.
+		var retried *retriedError
+		if errors.As(err, &retried) {
+			os.Exit(retried.code)
+		}
 		if errors.Is(err, errUsage) {
 			// The usage text has already been written; exit non-zero so a
 			// mistyped command in a script does not read as success.
@@ -72,7 +79,8 @@ func printUsage() {
 	fmt.Println("  room list                 List public and private rooms")
 	fmt.Println("  room rm <name>            Delete a public room")
 	fmt.Println("\nOptions:")
-	fmt.Printf("  --api HOST:PORT           Management API address (default %s)\n", defaultAPIAddr)
+	fmt.Printf("  --api ADDR                Management API socket or address (default %s)\n", defaultAPIAddr)
+	fmt.Println("                            unix:/PATH/TO.sock, or HOST:PORT for a TCP listener")
 	fmt.Println("  --token-file PATH         File containing the API token")
 	fmt.Println("  --generate                Mint a strong random password (user add, user passwd)")
 	fmt.Println("  --yes                     Skip the confirmation prompt on destructive commands")
@@ -87,16 +95,29 @@ func printUsage() {
 	fmt.Printf("  The API token is read from $%s or from --token-file. The\n", tokenEnvVar)
 	fmt.Println("  token itself is never a flag value, for the same reason.")
 	fmt.Println("\nReaching the server:")
-	fmt.Println("  The management API binds to loopback and is NOT publicly exposed, so this")
-	fmt.Println("  tool assumes it runs on the server itself or through an SSH tunnel:")
+	fmt.Printf("  By default this talks to a unix socket at %s, which is\n", strings.TrimPrefix(defaultAPIAddr, unixPrefix))
+	fmt.Println("  where the access control lives. The socket sits in a directory only the")
+	fmt.Printf("  %s group can open, so the kernel decides who may connect\n", defaultAdminGroup)
+	fmt.Println("  before the server reads a byte. Being in that group IS the credential;")
+	fmt.Println("  there is no password or token to hold. Add yourself with:")
+	fmt.Println()
+	fmt.Printf("      sudo usermod -aG %s $USER    # then log out and back in\n", defaultAdminGroup)
+	fmt.Println()
+	fmt.Println("  This tool therefore runs on the server itself. To administer from a")
+	fmt.Println("  workstation, run it over ssh:")
+	fmt.Println()
+	fmt.Println("      ssh -t user@server benco_admin user list")
+	fmt.Println()
+	fmt.Println("  A TCP listener (--api HOST:PORT) is still supported for older setups. The")
+	fmt.Println("  management API performs NO authentication over TCP -- anything that can")
+	fmt.Println("  reach the port has full administrative control -- so it must stay on")
+	fmt.Println("  loopback, reached through a tunnel:")
 	fmt.Println()
 	fmt.Println("      ssh -N -L 8080:127.0.0.1:8080 user@server")
 	fmt.Println()
-	fmt.Println("  Note that BENCoscar's management API performs NO authentication of its")
-	fmt.Println("  own. Anything that can reach it has full administrative control, which is")
-	fmt.Println("  why it must stay on loopback. The token above is sent as a Bearer header")
-	fmt.Println("  for deployments that front the API with an authenticating reverse proxy;")
-	fmt.Println("  without such a proxy it has no effect.")
+	fmt.Println("  The token above is sent as a Bearer header for deployments that front the")
+	fmt.Println("  API with an authenticating reverse proxy; without such a proxy, or over the")
+	fmt.Println("  unix socket, it has no effect.")
 }
 
 // commonOpts are the flags every command accepts. They are parsed by hand
@@ -170,7 +191,17 @@ func clientFor(opts commonOpts) (*apiClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newAPIClient(opts.api, token), nil
+	c := newAPIClient(opts.api, token)
+
+	// Check reachability here, before any command prompts for a password or
+	// reads one from a pipe. A permission failure may re-execute this process
+	// under sg, and that has to happen while stdin is still untouched.
+	if c.socketPath != "" {
+		if err := probeSocket(c.socketPath); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
 func urlPathEscape(s string) string {
