@@ -396,6 +396,120 @@ func TestICBMService_ChannelMsgToHost(t *testing.T) {
 			},
 		},
 		{
+			// BENCO: fused consent for AIM. An AIM sender not authorized by the
+			// AIM recipient (RequiresAuthorization == true) is rejected even
+			// though neither has blocked the other. This ties messaging to the
+			// same grant that gates presence.
+			name:     "don't transmit aim->aim message because sender is not authorized",
+			instance: newTestInstance("sender-screen-name", sessOptWarning(10)),
+			mockParams: mockParams{
+				relationshipFetcherParams: relationshipFetcherParams{
+					relationshipParams: relationshipParams{
+						{
+							me:     state.NewIdentScreenName("sender-screen-name"),
+							them:   state.NewIdentScreenName("recipient-screen-name"),
+							result: state.Relationship{User: state.NewIdentScreenName("recipient-screen-name")},
+						},
+					},
+				},
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("recipient-screen-name"), requester: state.NewIdentScreenName("sender-screen-name"), result: true},
+					},
+				},
+			},
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{RequestID: 1234},
+				Body: wire.SNAC_0x04_0x06_ICBMChannelMsgToHost{
+					ChannelID:  wire.ICBMChannelIM,
+					ScreenName: "recipient-screen-name",
+					TLVRestBlock: wire.TLVRestBlock{
+						TLVList: wire.TLVList{
+							{Tag: wire.ICBMTLVRequestHostAck, Value: []byte{}},
+						},
+					},
+				},
+			},
+			expectOutput: &wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.ICBM,
+					SubGroup:  wire.ICBMErr,
+					RequestID: 1234,
+				},
+				Body: wire.SNACError{
+					Code: wire.ErrorCodeNotLoggedOn,
+				},
+			},
+		},
+		{
+			// BENCO: an authorized (e.g. grandfathered) AIM relationship messages
+			// normally. RequiresAuthorization returns false, so the gate is a
+			// no-op and the message is relayed.
+			name:     "transmit aim->aim message when sender is authorized (grandfathered)",
+			instance: newTestInstance("sender-screen-name", sessOptWarning(10), sessOptWantTypingEvents),
+			mockParams: mockParams{
+				relationshipFetcherParams: relationshipFetcherParams{
+					relationshipParams: relationshipParams{
+						{
+							me:     state.NewIdentScreenName("sender-screen-name"),
+							them:   state.NewIdentScreenName("recipient-screen-name"),
+							result: state.Relationship{User: state.NewIdentScreenName("recipient-screen-name")},
+						},
+					},
+				},
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("recipient-screen-name"), requester: state.NewIdentScreenName("sender-screen-name"), result: false},
+					},
+				},
+				sessionRetrieverParams: sessionRetrieverParams{
+					retrieveSessionParams{
+						{
+							screenName: state.NewIdentScreenName("recipient-screen-name"),
+							result:     newTestInstance("recipient-screen-name", sessOptWarning(20), sessOptSignonComplete).Session(),
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToScreenNameActiveOnlyParams: relayToScreenNameActiveOnlyParams{
+						{
+							screenName: state.NewIdentScreenName("recipient-screen-name"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.ICBM,
+									SubGroup:  wire.ICBMChannelMsgToClient,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x04_0x07_ICBMChannelMsgToClient{
+									ChannelID:   wire.ICBMChannelIM,
+									TLVUserInfo: newTestInstance("sender-screen-name", sessOptWarning(10)).Session().TLVUserInfo(),
+									TLVRestBlock: wire.TLVRestBlock{
+										TLVList: wire.TLVList{
+											{Tag: wire.ICBMTLVData, Value: []byte{1, 2, 3, 4}},
+											{Tag: wire.ICBMTLVWantEvents, Value: []byte{}},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{RequestID: 1234},
+				Body: wire.SNAC_0x04_0x06_ICBMChannelMsgToHost{
+					ChannelID:  wire.ICBMChannelIM,
+					ScreenName: "recipient-screen-name",
+					TLVRestBlock: wire.TLVRestBlock{
+						TLVList: wire.TLVList{
+							{Tag: wire.ICBMTLVData, Value: []byte{1, 2, 3, 4}},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
+		},
+		{
 			name:     "don't transmit message from sender to recipient because recipient doesn't exist",
 			instance: newTestInstance("sender-screen-name", sessOptWarning(10)),
 			mockParams: mockParams{
@@ -2104,6 +2218,21 @@ func TestICBMService_ChannelMsgToHost(t *testing.T) {
 					RecordPreAuth(matchContext(), params.owner, params.buddy).
 					Return(params.err)
 			}
+			// BENCO: ChannelMsgToHost now gates aim→aim messages on
+			// RequiresAuthorization. Register any case-specific expectations
+			// first, then an authorized-by-default (false) catch-all so the
+			// pre-existing relay scenarios — which all assume an authorized
+			// sender — keep passing without per-case edits. Cases that need a
+			// specific result set requiresAuthorizationParams.
+			for _, params := range tc.mockParams.requiresAuthorizationParams {
+				contactPreAuth.EXPECT().
+					RequiresAuthorization(matchContext(), params.owner, params.requester).
+					Return(params.result, params.err)
+			}
+			contactPreAuth.EXPECT().
+				RequiresAuthorization(matchContext(), mock.Anything, mock.Anything).
+				Return(false, nil).
+				Maybe()
 
 			svc := ICBMService{
 				relationshipFetcher:  relationshipFetcher,

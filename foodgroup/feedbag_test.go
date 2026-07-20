@@ -402,6 +402,82 @@ func TestFeedbagService_UpsertItem(t *testing.T) {
 		wantICBMBody wire.SNAC_0x04_0x06_ICBMChannelMsgToHost
 	}{
 		{
+			// BENCO: aim→aim add now requires authorization. First add (no
+			// pending tag) is rejected with 0x000E, the row is NOT stored, and
+			// the target receives SNAC(0x13,0x19) FeedbagRequestAuthorizeToClient
+			// naming the requester.
+			name:     "aim->aim add requires authorization",
+			instance: newTestInstance("alice"),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagInsertItem,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x08_FeedbagInsertItem{
+					Items: []wire.FeedbagItem{
+						{ClassID: wire.FeedbagClassIdBuddy, Name: "bob"},
+					},
+				},
+			},
+			mockParams: mockParams{
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("bob"), requester: state.NewIdentScreenName("alice"), result: true},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToScreenNameParams: relayToScreenNameParams{
+						{
+							screenName: state.NewIdentScreenName("bob"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagRequestAuthorizeToClient,
+									Flags:     wire.SNACFlagsExtendedInfo,
+								},
+								// matcher: the request must name the requester
+								Body: func(val any) bool {
+									b, ok := val.(wire.SNAC_0x13_0x19_FeedbagRequestAuthorizeToClient)
+									return ok && b.ScreenName == "alice"
+								},
+							},
+						},
+					},
+					relayToOtherInstancesParams: relayToOtherInstancesParams{
+						{
+							screenName: state.NewIdentScreenName("alice"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagInsertItem,
+									RequestID: wire.ReqIDFromServer,
+								},
+								// toUpsert is empty: the pending row is not stored
+								Body: wire.SNAC_0x13_0x09_FeedbagUpdateItem{},
+							},
+						},
+					},
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("alice"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagStatus,
+									RequestID: 1234,
+								},
+								Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+									Results: []uint16{0x000E},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
+		},
+		{
 			name:     "add buddies",
 			instance: newTestInstance("me"),
 			inputSNAC: wire.SNACMessage{
@@ -3917,6 +3993,63 @@ func TestFeedbagService_RespondAuthorizeToHost(t *testing.T) {
 									ScreenName: granter.String(),
 									Accepted:   0,
 									Reason:     "I don't know you!",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			// BENCO: AIM↔AIM authorization is mutual. Granting bob's request
+			// records pre-auth in BOTH directions so both may message each
+			// other, unlike the one-directional ICQ grants above (whose UINs
+			// are non-zero, so the reciprocal branch is skipped).
+			name:        "AIM mutual: granting authorizes both directions",
+			granterSess: newTestInstance("alice"),
+			requesterSess: func() *state.Session {
+				s := state.NewSession()
+				s.SetIdentScreenName(state.NewIdentScreenName("bob"))
+				s.SetUsesFeedbag()
+				return s
+			}(),
+			bodyIn: wire.SNAC_0x13_0x1A_FeedbagRespondAuthorizeToHost{
+				ScreenName: "bob",
+				Accepted:   1,
+				Reason:     "welcome",
+			},
+			mockParams: mockParams{
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					recordPreAuthParams: recordPreAuthParams{
+						// authorizeContact: granter pre-authorizes requester
+						{owner: state.NewIdentScreenName("alice"), buddy: state.NewIdentScreenName("bob")},
+						// BENCO reciprocal: requester pre-authorizes granter
+						{owner: state.NewIdentScreenName("bob"), buddy: state.NewIdentScreenName("alice")},
+					},
+				},
+				feedbagManagerParams: feedbagManagerParams{
+					feedbagParams: feedbagParams{
+						{screenName: state.NewIdentScreenName("bob"), results: []wire.FeedbagItem{}},
+					},
+				},
+				relationshipFetcherParams: relationshipFetcherParams{
+					relationshipParams: relationshipParams{
+						{me: state.NewIdentScreenName("alice"), them: state.NewIdentScreenName("bob"), result: state.Relationship{}},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToScreenNameParams: relayToScreenNameParams{
+						{
+							screenName: state.NewIdentScreenName("bob"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagPreAuthorizedBuddy,
+								},
+								Body: wire.SNAC_0x13_0x15_FeedbagPreAuthorizedBuddy{
+									ScreenName: "alice",
+									Message:    "welcome",
+									Flags:      0,
 								},
 							},
 						},

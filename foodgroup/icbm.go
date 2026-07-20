@@ -113,6 +113,25 @@ func (s *ICBMService) ChannelMsgToHost(ctx context.Context, instance *state.Sess
 		return newICBMErr(inFrame.RequestID, wire.ErrorCodeInLocalPermitDeny), nil
 	}
 
+	// BENCO: fused consent for AIM↔AIM. An AIM connection grants BOTH presence
+	// and messaging from the SAME authorization, so an AIM user may only message
+	// an AIM recipient who has authorized them (RequiresAuthorization == false).
+	// Grandfathered/existing relationships were seeded as authorized by migration
+	// 0037, so established conversations keep working. This is scoped to aim→aim
+	// (both UINs zero) on purpose: any ICQ involvement is left entirely to
+	// upstream's flow, whose authorization/system traffic rides channel-4 ICBMs
+	// handled below and must NOT be gated here. The AIM connection request itself
+	// is a feedbag SNAC, not an ICBM, so it is unaffected by this gate.
+	if instance.UIN() == 0 && recip.UIN() == 0 {
+		needsAuth, err := s.contactPreAuthorizer.RequiresAuthorization(ctx, recip, instance.IdentScreenName())
+		if err != nil {
+			return nil, fmt.Errorf("RequiresAuthorization: %w", err)
+		}
+		if needsAuth {
+			return newICBMErr(inFrame.RequestID, wire.ErrorCodeNotLoggedOn), nil
+		}
+	}
+
 	recipSess := s.sessionRetriever.RetrieveSession(recip)
 	if recipSess == nil {
 		// check for TLV that indicates that the message should be saved offline.

@@ -269,6 +269,36 @@ func (s *FeedbagService) UpsertItem(ctx context.Context, instance *state.Session
 						return nil, fmt.Errorf("sendLegacyAuthReq: %w", err)
 					}
 				}
+			case instance.UIN() == 0 && sn.UIN() == 0:
+				// sender:aim, recipient:aim
+				// BENCO: upstream has NO case here, so aim→aim adds fell through
+				// and were inserted silently and unilaterally — no consent from
+				// the target. Mirror the icq→icq flow above: require the target's
+				// authorization before the buddy row is stored, and notify the
+				// target so they can grant or deny. This is what makes an AIM
+				// connection consensual; the same grant also gates messaging
+				// (see icbm.go ChannelMsgToHost).
+				blocked, err := s.contactPreAuthorizer.RequiresAuthorization(ctx, sn, instance.IdentScreenName())
+				if err != nil {
+					return nil, fmt.Errorf("contactPreAuthorizer.RequiresAuthorization: %w", err)
+				}
+				hasPending := item.HasTag(wire.FeedbagAttributesPending)
+				if blocked && !hasPending {
+					// First add: don't store the row. Return 0x000E and deliver
+					// the authorization request to the target. The client
+					// re-sends with the Pending tag (handled below).
+					authRequired[item.Name] = true
+					s.sendAIMAuthReq(ctx, instance, sn)
+					continue
+				} else if hasPending && !blocked {
+					// Authorization has since been granted; drop the pending tag
+					// so the row is stored as a normal buddy.
+					item.TLVList = slices.DeleteFunc(item.TLVList, func(t wire.TLV) bool {
+						return t.Tag == wire.FeedbagAttributesPending
+					})
+				}
+				// blocked && hasPending: store the row WITH the pending tag
+				// (retry of a still-unauthorized add).
 			}
 		}
 		toUpsert = append(toUpsert, item)
@@ -933,8 +963,22 @@ func (s *FeedbagService) RespondAuthorizeToHost(ctx context.Context, instance st
 			return err
 		}
 	case 1:
-		if err := s.authorizeContact(ctx, instance, state.NewIdentScreenName(inBody.ScreenName), inBody.Reason); err != nil {
+		requester := state.NewIdentScreenName(inBody.ScreenName)
+		if err := s.authorizeContact(ctx, instance, requester, inBody.Reason); err != nil {
 			return fmt.Errorf("s.authorizeContact: %w", err)
+		}
+		// BENCO: for AIM↔AIM, authorization is mutual. authorizeContact records
+		// only (owner=granter, authorized=requester), which lets the requester
+		// add/message the granter. The requester originally initiated contact by
+		// adding the granter, so granting completes a two-way consent: also
+		// record (owner=requester, authorized=granter) so BOTH may message each
+		// other. Without this, the granter could not message back the person
+		// they just accepted. ICQ keeps upstream's one-directional grant
+		// (guarded on both being AIM, i.e. UIN == 0).
+		if instance.UIN() == 0 && requester.UIN() == 0 {
+			if err := s.contactPreAuthorizer.RecordPreAuth(ctx, requester, instance); err != nil {
+				return fmt.Errorf("reciprocal RecordPreAuth: %w", err)
+			}
 		}
 	default:
 		return fmt.Errorf("invalid accepted flag %d", inBody.Accepted)
