@@ -1,18 +1,19 @@
 # Deploying BENCoscar
 
-Three scripts. Build on your workstation, install on the server.
+Install once from a workstation. After that, deploys run **on the server**:
+`deploy.sh` pulls, builds and rolls the service over in one command.
 
 **No hostname is baked into any of them** — this repo is public, and the server
-address is a deployment detail. Every script requires `HOSTNAME_FQDN` and
-refuses to run without it.
+address is a deployment detail. The install scripts require `HOSTNAME_FQDN` and
+refuse to run without it.
 
-## Quick version
+## First install
 
 ```bash
 # workstation
 ./scripts/benco-deploy/build.sh                      # defaults to linux/arm64
 scp dist/bencoscar-linux-arm64 <vps>:~/bencoscar
-scp scripts/benco-deploy/{install.sh,letsencrypt.sh} <vps>:~/
+scp scripts/benco-deploy/{install.sh,letsencrypt.sh,deploy.sh} <vps>:~/
 
 # server
 sudo HOSTNAME_FQDN=chat.example.com ./install.sh
@@ -20,6 +21,18 @@ sudo HOSTNAME_FQDN=chat.example.com ./letsencrypt.sh
 ```
 
 Then create an account and point a client at it.
+
+## Every deploy after that
+
+```bash
+# on the server
+sudo ./deploy.sh
+```
+
+That is the whole thing. It clones the public repo (HTTPS, no credentials) to
+`/opt/bencoscar/src` on first run and fetches after that, builds both binaries,
+and swaps them in with a health check and automatic rollback. See
+[`deploy.sh`](#deploysh) below.
 
 ## What changed from the stunnel setup
 
@@ -40,11 +53,87 @@ existing client configs keep working.
 
 ## The scripts
 
+### `deploy.sh`
+
+**The normal way to ship a change.** Runs on the server, as root, against an
+installation that already exists.
+
+```bash
+sudo ./deploy.sh                  # deploy the benco branch
+sudo ./deploy.sh --branch main    # something else
+sudo ./deploy.sh --dry-run        # show every step, change nothing
+sudo ./deploy.sh --force          # rebuild and reinstall the same commit
+```
+
+What it does, in order:
+
+1. Checks `git` and a Go toolchain new enough for `go.mod`. It never installs Go
+   silently — it prints the upstream tarball commands for this architecture and
+   stops.
+2. Finds the installed unit (`bencoscar`, or `ras` for an upstream-style
+   install) and reads the binary path, service account and management API
+   address **out of the unit itself**, so it cannot drift from what is running.
+   If no unit exists it tells you to run `install.sh` and stops — it will not
+   half-install.
+3. Clones or fetches `/opt/<service>/src`. **A dirty checkout aborts the
+   deploy**: someone editing code on the server is a situation to surface, not
+   to clobber. Untracked files are only a warning.
+4. Prints `git log <current>..<target> --oneline` and asks for confirmation,
+   calling out any migrations in the range. Nothing to deploy is a clean exit,
+   not an error.
+5. Builds `./cmd/server` and `./cmd/benco_admin` **into a temp directory**, and
+   checks each artifact is an ELF executable for this machine that actually
+   runs. A working binary is never replaced by an unverified one.
+6. Stops the service, copies the running binaries to `<binary>.prev`, installs,
+   starts.
+7. Health check — see below.
+8. On failure, restores `.prev`, restarts, dumps the journal, and exits non-zero.
+
+It deploys **code only**. It never touches the unit, the environment file, the
+database, the certificate, the service account or the admin group, and the
+server gains no privileges from any of it.
+
+#### What the health check actually probes
+
+`systemctl is-active` is not sufficient: the OSCAR listener binds before the
+database is opened, a migration can fail after start, and `Restart=on-failure`
+makes a crash loop look like `activating`. So all three must hold, retried for
+up to 30 seconds because migrations run during startup:
+
+1. `systemctl is-active` reports the unit running.
+2. `GET /version` on the **management API** answers. The unit puts that API on a
+   unix socket, so the probe is
+   `curl --unix-socket /run/bencoscar/mgmt.sock http://localhost/version`. Root
+   traverses the `0750` runtime directory without needing the admin group. If
+   `curl` is absent it falls back to the freshly built
+   `benco_admin user list --api …`, and says that the check was weaker.
+3. **The commit that endpoint reports matches the commit just installed.** This
+   is the part that distinguishes a real deploy from an old process that never
+   died and is still holding the socket — the commit is baked in at link time by
+   the same `-X main.commit` ldflag `build.sh` uses.
+
+#### Rolling back by hand
+
+The replaced binaries are kept beside their replacements:
+
+```bash
+sudo systemctl stop bencoscar
+sudo cp -a /usr/local/bin/bencoscar.prev /usr/local/bin/bencoscar
+sudo cp -a /usr/local/bin/benco_admin.prev /usr/local/bin/benco_admin
+sudo systemctl start bencoscar
+```
+
+One generation is kept — each deploy overwrites `.prev`. For anything older,
+check out the commit in `/opt/bencoscar/src` and deploy that.
+
 ### `build.sh`
 
 Cross-compiles a static binary. Defaults to `linux/arm64`; override with
 `GOOS`/`GOARCH`. Cross-compiling needs no toolchain because the SQLite driver is
 pure Go and CGO stays off.
+
+Still the route for the first install, and the alternative for **a server you do
+not want a Go toolchain on** — build elsewhere, `scp`, re-run `install.sh`.
 
 ### `install.sh`
 
@@ -186,11 +275,43 @@ cleartext OSCAR is answering, which should now be impossible.
 ## Upgrading
 
 ```bash
+# on the server
+sudo ./deploy.sh
+```
+
+### Without Go on the server
+
+The old route still works and stays supported, because a server that should not
+carry a compiler is a legitimate position:
+
+```bash
 ./scripts/benco-deploy/build.sh
 scp dist/bencoscar-linux-arm64 <vps>:~/bencoscar
 sudo HOSTNAME_FQDN=chat.example.com ./install.sh
 ```
 
-Database migrations run automatically at startup. Take a backup first if the
-release notes mention a schema change — migration `0034` in particular is
-one-way and drops the old password columns.
+`install.sh` is idempotent, so this upgrades the binary and restarts. Note it
+does **not** health-check the management API or keep a rollback copy — that part
+is `deploy.sh`'s.
+
+### Migrations
+
+There is no migration step in either route. The server runs its own migrations
+at startup, so they happen inside the restart.
+
+Take a backup first when the range touches `state/migrations/` — `deploy.sh`
+says so when it does. Two are one-way: `0034` drops the old password columns,
+and **`0036` drops the v1 `deviceKeys` table outright**. A first deploy onto a
+database that predates 0036 should be backed up beforehand.
+
+There is no `backup-db.sh` in this repo. Copy the file by hand, with the service
+stopped so SQLite is not mid-write:
+
+```bash
+sudo systemctl stop bencoscar
+sudo cp -a /var/lib/bencoscar/oscar.sqlite ~/oscar.sqlite.bak
+sudo systemctl start bencoscar
+```
+
+Clients keep their own keypairs and republish them, so what 0036 destroys is
+server-side v1 key state, not anyone's identity.
