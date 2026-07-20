@@ -96,6 +96,25 @@ curl -X PUT http://127.0.0.1:8080/user/password \
   -d '{"screen_name":"someone","password":"a-new-password"}'
 ```
 
+## Starting the database over
+
+```bash
+sudo ./reset-db.sh
+```
+
+Stops the service, moves the database aside, and restarts. Migrations rebuild
+the schema at boot, so there is nothing to restore or re-import — but **every
+account is destroyed**, and argon2id hashes cannot be recovered from what is
+removed, so accounts have to be created again.
+
+The database is moved rather than deleted and the rollback command is printed.
+`--keep-accounts` clears published device keys while preserving the users table,
+for when clients are in a confused state but the accounts are fine.
+
+Clients keep their own keys and republish them, but each one is a brand new
+device to a fresh server: expect the approval prompts of a new account, and
+contacts will see safety numbers change.
+
 ## Checking it works
 
 ```bash
