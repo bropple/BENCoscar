@@ -46,6 +46,8 @@ const (
 	BENCOKeyDirQueryReply     uint16 = 0x0005
 	BENCOKeyDirRevokeRequest  uint16 = 0x0006
 	BENCOKeyDirRevokeReply    uint16 = 0x0007
+	BENCOKeyDirRestoreRequest uint16 = 0x0008
+	BENCOKeyDirRestoreReply   uint16 = 0x0009
 )
 
 // BENCOKeyDirVersion is the current payload version, carried in every request so
@@ -132,6 +134,28 @@ type SNAC_0xBE00_0x0007_BENCOKeyDirRevokeReply struct {
 	Revoked uint8
 }
 
+// SNAC_0xBE00_0x0008_BENCOKeyDirRestoreRequest lifts a revocation, letting a
+// previously removed device publish again.
+//
+// This is the other half of Revoke, and the design is incomplete without it. A
+// tombstone that can never be lifted turns "remove this device" into "destroy
+// this device", because the machine keeps its keypair, republishes on every
+// sign-on, and is refused forever with no way out. Reinstalling a laptop is a
+// normal thing to do; it must not require deleting the account.
+//
+// Restricted to the account's own devices, like publish and revoke: the screen
+// name comes from the session and there is no field for one.
+type SNAC_0xBE00_0x0008_BENCOKeyDirRestoreRequest struct {
+	Version uint16
+	BoxKey  []byte `oscar:"len_prefix=uint16"`
+}
+
+// SNAC_0xBE00_0x0009_BENCOKeyDirRestoreReply reports whether a revocation was
+// lifted. Zero means there was no tombstone for that key, which is not an error.
+type SNAC_0xBE00_0x0009_BENCOKeyDirRestoreReply struct {
+	Restored uint8
+}
+
 // WithBENCOKeyDirRateLimits returns limits with this foodgroup's classes added.
 //
 // A wrapper rather than an edit to DefaultSNACRateLimits so the upstream file
@@ -151,6 +175,8 @@ func WithBENCOKeyDirRateLimits(limits SNACRateLimits) SNACRateLimits {
 		BENCOKeyDirQueryReply:     1,
 		BENCOKeyDirRevokeRequest:  1,
 		BENCOKeyDirRevokeReply:    1,
+		BENCOKeyDirRestoreRequest: 1,
+		BENCOKeyDirRestoreReply:   1,
 	}
 	return limits
 }
@@ -166,5 +192,7 @@ func init() {
 		BENCOKeyDirQueryReply:     "BENCOKeyDirQueryReply",
 		BENCOKeyDirRevokeRequest:  "BENCOKeyDirRevokeRequest",
 		BENCOKeyDirRevokeReply:    "BENCOKeyDirRevokeReply",
+		BENCOKeyDirRestoreRequest: "BENCOKeyDirRestoreRequest",
+		BENCOKeyDirRestoreReply:   "BENCOKeyDirRestoreReply",
 	}
 }

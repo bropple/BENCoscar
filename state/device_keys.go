@@ -189,3 +189,28 @@ func (f SQLiteUserStore) RevokeDeviceKey(ctx context.Context, screenName IdentSc
 	// for, so report no change rather than an error.
 	return false, nil
 }
+
+// RestoreDeviceKey lifts a revocation, letting a removed device publish again.
+// It reports whether a tombstone was actually cleared.
+//
+// Revocation without this is not "removed", it is "destroyed": the machine keeps
+// its keypair and republishes on every sign-on, so it would be refused forever
+// with no way back. Reinstalling a laptop has to be recoverable.
+//
+// The row is deleted rather than un-marked. It carries a publishedAt from before
+// the revocation, and the device is about to republish anyway — leaving a stale
+// row would misreport when the key was last seen, which is what the eviction
+// order depends on.
+func (f SQLiteUserStore) RestoreDeviceKey(ctx context.Context, screenName IdentScreenName, boxKey []byte) (bool, error) {
+	res, err := f.db.ExecContext(ctx,
+		`DELETE FROM deviceKeys WHERE identScreenName = ? AND boxKey = ? AND revokedAt IS NOT NULL`,
+		screenName.String(), boxKey)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}

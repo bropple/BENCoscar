@@ -1070,6 +1070,8 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 			return rt.BENCOKeyDirQueryRequest(ctx, instance, inFrame, r, rw)
 		case wire.BENCOKeyDirRevokeRequest:
 			return rt.BENCOKeyDirRevokeRequest(ctx, instance, inFrame, r, rw)
+		case wire.BENCOKeyDirRestoreRequest:
+			return rt.BENCOKeyDirRestoreRequest(ctx, instance, inFrame, r, rw)
 		}
 	case wire.Alert:
 		switch inFrame.SubGroup {

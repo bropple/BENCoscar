@@ -191,3 +191,87 @@ func TestDeviceKeys_RejectsTooManyDevices(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got, "a rejected publish must not partially apply")
 }
+
+// The dead end this fixes: without Restore, a tombstone is permanent. The
+// removed machine keeps its keypair and republishes on every sign-on, so it is
+// refused forever with no way back — "remove device" would really mean "destroy
+// device", and reinstalling a laptop would require deleting the account.
+func TestDeviceKeys_RestoreLetsARemovedDevicePublishAgain(t *testing.T) {
+	ctx := context.Background()
+	f, sn := newDeviceKeyStore(t, "someuser")
+
+	_, err := f.PublishDeviceKeys(ctx, sn, []DeviceKey{{BoxKey: key(1)}, {BoxKey: key(2)}})
+	require.NoError(t, err)
+
+	revoked, err := f.RevokeDeviceKey(ctx, sn, key(1))
+	require.NoError(t, err)
+	require.True(t, revoked)
+
+	// Still refused while the tombstone stands.
+	refused, err := f.PublishDeviceKeys(ctx, sn, []DeviceKey{{BoxKey: key(1)}, {BoxKey: key(2)}})
+	require.NoError(t, err)
+	require.Len(t, refused, 1)
+
+	restored, err := f.RestoreDeviceKey(ctx, sn, key(1))
+	require.NoError(t, err)
+	assert.True(t, restored)
+
+	// And now it publishes normally again.
+	refused, err = f.PublishDeviceKeys(ctx, sn, []DeviceKey{{BoxKey: key(1)}, {BoxKey: key(2)}})
+	require.NoError(t, err)
+	assert.Empty(t, refused, "a restored device must publish like any other")
+
+	got, err := f.DeviceKeys(ctx, sn)
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+}
+
+func TestDeviceKeys_RestoreIsANoOpWhenNothingWasRevoked(t *testing.T) {
+	ctx := context.Background()
+	f, sn := newDeviceKeyStore(t, "someuser")
+
+	_, err := f.PublishDeviceKeys(ctx, sn, []DeviceKey{{BoxKey: key(1)}})
+	require.NoError(t, err)
+
+	// An active device: nothing to lift, and it must not be disturbed.
+	restored, err := f.RestoreDeviceKey(ctx, sn, key(1))
+	require.NoError(t, err)
+	assert.False(t, restored)
+
+	got, err := f.DeviceKeys(ctx, sn)
+	require.NoError(t, err)
+	assert.Len(t, got, 1, "restoring an active device must not remove it")
+
+	// A key this account never published.
+	restored, err = f.RestoreDeviceKey(ctx, sn, key(9))
+	require.NoError(t, err)
+	assert.False(t, restored)
+}
+
+func TestDeviceKeys_RestoreIsScopedToTheAccount(t *testing.T) {
+	ctx := context.Background()
+	f, alice := newDeviceKeyStore(t, "alice")
+
+	bob := NewIdentScreenName("bob")
+	u := User{IdentScreenName: bob, DisplayScreenName: "bob"}
+	require.NoError(t, u.HashPassword("the_password"))
+	require.NoError(t, f.InsertUser(ctx, u))
+
+	for _, sn := range []IdentScreenName{alice, bob} {
+		_, err := f.PublishDeviceKeys(ctx, sn, []DeviceKey{{BoxKey: key(1)}})
+		require.NoError(t, err)
+		_, err = f.RevokeDeviceKey(ctx, sn, key(1))
+		require.NoError(t, err)
+	}
+
+	restored, err := f.RestoreDeviceKey(ctx, alice, key(1))
+	require.NoError(t, err)
+	require.True(t, restored)
+
+	// Bob's identical key must still be revoked: restoring one account's device
+	// must never lift another's, or an attacker could undo the removal a user
+	// performed to lock them out.
+	refused, err := f.PublishDeviceKeys(ctx, bob, []DeviceKey{{BoxKey: key(1)}})
+	require.NoError(t, err)
+	assert.Len(t, refused, 1, "bob's revocation must survive alice's restore")
+}

@@ -33,6 +33,8 @@ type fakeDeviceKeyManager struct {
 	queriedFor   state.IdentScreenName
 	revokedFor   state.IdentScreenName
 	revokedKey   []byte
+	restoredFor  state.IdentScreenName
+	restoredKey  []byte
 }
 
 func (f *fakeDeviceKeyManager) DeviceKeys(_ context.Context, sn state.IdentScreenName) ([]state.DeviceKey, error) {
@@ -58,6 +60,15 @@ func (f *fakeDeviceKeyManager) PublishDeviceKeys(_ context.Context, sn state.Ide
 func (f *fakeDeviceKeyManager) RevokeDeviceKey(_ context.Context, sn state.IdentScreenName, boxKey []byte) (bool, error) {
 	f.revokedFor = sn
 	f.revokedKey = boxKey
+	if f.err != nil {
+		return false, f.err
+	}
+	return true, nil
+}
+
+func (f *fakeDeviceKeyManager) RestoreDeviceKey(_ context.Context, sn state.IdentScreenName, boxKey []byte) (bool, error) {
+	f.restoredFor = sn
+	f.restoredKey = boxKey
 	if f.err != nil {
 		return false, f.err
 	}
@@ -254,4 +265,36 @@ func TestBENCOKeyDir_TooManyDevicesIsAClientError(t *testing.T) {
 		})
 	require.NoError(t, err)
 	assert.Equal(t, wire.BENCOKeyDirErr, out.Frame.SubGroup)
+}
+
+// Restore is scoped to the caller's own account for the same reason revoke is:
+// lifting someone else's revocation would undo exactly the removal a user
+// performed to lock an attacker out.
+func TestBENCOKeyDir_RestoreUsesSessionScreenName(t *testing.T) {
+	mgr := &fakeDeviceKeyManager{}
+	svc := NewBENCOKeyDirService(slog.Default(), mgr)
+
+	out, err := svc.RestoreKey(context.Background(), testSession("alice"), wire.SNACFrame{RequestID: 11},
+		wire.SNAC_0xBE00_0x0008_BENCOKeyDirRestoreRequest{BoxKey: devKey(4)})
+	require.NoError(t, err)
+
+	assert.Equal(t, state.NewIdentScreenName("alice"), mgr.restoredFor)
+	assert.Equal(t, devKey(4), mgr.restoredKey)
+	assert.Equal(t, wire.BENCOKeyDirRestoreReply, out.Frame.SubGroup)
+	assert.Equal(t, uint32(11), out.Frame.RequestID)
+
+	body := out.Body.(wire.SNAC_0xBE00_0x0009_BENCOKeyDirRestoreReply)
+	assert.Equal(t, uint8(1), body.Restored)
+}
+
+func TestBENCOKeyDir_RestoreRejectsMalformedKey(t *testing.T) {
+	mgr := &fakeDeviceKeyManager{}
+	svc := NewBENCOKeyDirService(slog.Default(), mgr)
+
+	out, err := svc.RestoreKey(context.Background(), testSession("alice"), wire.SNACFrame{},
+		wire.SNAC_0xBE00_0x0008_BENCOKeyDirRestoreRequest{BoxKey: []byte{1, 2}})
+	require.NoError(t, err)
+
+	assert.Equal(t, wire.BENCOKeyDirErr, out.Frame.SubGroup)
+	assert.Empty(t, mgr.restoredFor.String(), "a malformed key must not reach storage")
 }

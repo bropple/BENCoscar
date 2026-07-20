@@ -22,6 +22,8 @@ type DeviceKeyManager interface {
 	PublishDeviceKeys(ctx context.Context, screenName state.IdentScreenName, devices []state.DeviceKey) ([]state.DeviceKey, error)
 	// RevokeDeviceKey tombstones a device, reporting whether anything changed.
 	RevokeDeviceKey(ctx context.Context, screenName state.IdentScreenName, boxKey []byte) (bool, error)
+	// RestoreDeviceKey lifts a revocation, reporting whether anything changed.
+	RestoreDeviceKey(ctx context.Context, screenName state.IdentScreenName, boxKey []byte) (bool, error)
 }
 
 // NewBENCOKeyDirService returns a device key directory service.
@@ -171,6 +173,51 @@ func (s BENCOKeyDirService) RevokeKey(
 			RequestID: inFrame.RequestID,
 		},
 		Body: wire.SNAC_0xBE00_0x0007_BENCOKeyDirRevokeReply{Revoked: flag},
+	}, nil
+}
+
+// RestoreKey lifts a revocation on one of the sending account's own devices, so
+// a machine that was removed can publish again.
+//
+// This is what makes removal reversible. Without it a tombstone is permanent:
+// the removed machine keeps its keypair, republishes on every sign-on, and is
+// refused forever with no route back short of deleting the account. The client
+// reaches this through the device-approval dialog — a removed device coming back
+// is a question for a human, and this is the answer when the human says yes.
+//
+// Scoped to the session's own account, like publish and revoke. Restoring
+// someone else's device would let an attacker undo exactly the removal a user
+// performed to lock them out.
+func (s BENCOKeyDirService) RestoreKey(
+	ctx context.Context,
+	sess *state.Session,
+	inFrame wire.SNACFrame,
+	inBody wire.SNAC_0xBE00_0x0008_BENCOKeyDirRestoreRequest,
+) (wire.SNACMessage, error) {
+
+	if len(inBody.BoxKey) != wire.BENCOKeyDirBoxKeyLen {
+		return errSNAC(inFrame, wire.ErrorCodeInvalidSnac), nil
+	}
+
+	restored, err := s.deviceKeyManager.RestoreDeviceKey(ctx, sess.IdentScreenName(), inBody.BoxKey)
+	if err != nil {
+		return wire.SNACMessage{}, err
+	}
+
+	var flag uint8
+	if restored {
+		flag = 1
+		s.logger.InfoContext(ctx, "restored a revoked device key",
+			"screen_name", sess.IdentScreenName())
+	}
+
+	return wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.BENCOKeyDir,
+			SubGroup:  wire.BENCOKeyDirRestoreReply,
+			RequestID: inFrame.RequestID,
+		},
+		Body: wire.SNAC_0xBE00_0x0009_BENCOKeyDirRestoreReply{Restored: flag},
 	}, nil
 }
 

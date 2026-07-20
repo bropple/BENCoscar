@@ -48,6 +48,13 @@ client rather than silently dropped, so it can be surfaced through the existing
 device-approval dialog: *a device you removed has come back — approve?* Removal
 stays meaningful, and deliberately re-adding a reinstalled laptop is one click.
 
+**Restore is not optional.** A tombstone that cannot be lifted does not mean
+"removed", it means "destroyed": the machine keeps its keypair, republishes on
+every sign-on, and is refused forever. Telling the user to "approve it from
+another device" then leads nowhere, and the only escape is wiping every machine.
+Reinstalling a laptop has to be recoverable, so approving a returned device lifts
+the revocation before republishing.
+
 **Limit worth stating plainly:** none of this defends against someone who has the
 account password. They can sign in, revoke your devices and approve their own.
 Device removal means "stop encrypting to a machine I no longer control"; it is
@@ -60,6 +67,7 @@ not an account-recovery mechanism.
 | `0x0002` / `0x0003` | Publish request / reply | own account only |
 | `0x0004` / `0x0005` | Query request / reply | any signed-in user |
 | `0x0006` / `0x0007` | Revoke request / reply | own account only |
+| `0x0008` / `0x0009` | Restore request / reply | own account only |
 | `0x0001` | Error | — |
 
 **Publish** replaces the account's device set; a client sends its complete list
