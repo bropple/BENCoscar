@@ -167,8 +167,9 @@ func (f SQLiteUserStore) PublishDeviceKeys(ctx context.Context, screenName Ident
 // still holds its keypair and republishes on next sign-on, so a deleted row
 // would simply reappear and removal would mean nothing.
 //
-// Revoking a key the account never published is a no-op, not an error: the
-// caller wanted it gone and it is gone.
+// Revoking a key the account never published records a tombstone rather than
+// doing nothing. That is what makes DENYING a device durable — see the comment
+// at the insert below.
 func (f SQLiteUserStore) RevokeDeviceKey(ctx context.Context, screenName IdentScreenName, boxKey []byte) (bool, error) {
 	res, err := f.db.ExecContext(ctx,
 		`UPDATE deviceKeys SET revokedAt = ? WHERE identScreenName = ? AND boxKey = ? AND revokedAt IS NULL`,
@@ -184,10 +185,32 @@ func (f SQLiteUserStore) RevokeDeviceKey(ctx context.Context, screenName IdentSc
 		return true, nil
 	}
 
-	// Nothing updated: either the key was never published, or it is already
-	// tombstoned. Both mean "it is not active", which is what the caller asked
-	// for, so report no change rather than an error.
-	return false, nil
+	// Nothing to update. Either the key is already tombstoned, or it was never
+	// published — and the second case still needs a tombstone.
+	//
+	// That matters for DENYING a device rather than removing one. A device
+	// asking to link has not published anything yet, so with no row to update
+	// the refusal would leave no trace, and the machine would simply ask again
+	// on its next sign-on. Recording it means the answer survives the device
+	// being offline when it was given, which a live message cannot.
+	var exists int
+	err = f.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM deviceKeys WHERE identScreenName = ? AND boxKey = ?`,
+		screenName.String(), boxKey).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	if exists > 0 {
+		return false, nil // already tombstoned; nothing changed
+	}
+
+	now := time.Now().Unix()
+	if _, err := f.db.ExecContext(ctx,
+		`INSERT INTO deviceKeys (identScreenName, boxKey, publishedAt, revokedAt) VALUES (?, ?, ?, ?)`,
+		screenName.String(), boxKey, now, now); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RestoreDeviceKey lifts a revocation, letting a removed device publish again.

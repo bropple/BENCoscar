@@ -144,7 +144,20 @@ func TestDeviceKeys_RevokeIsIdempotentAndScoped(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, revoked)
 
-	// Revoking something never published is likewise a no-op.
+	// Revoking a key that was never published DOES record a tombstone. That is
+	// what makes denying a device durable: a device asking to link has published
+	// nothing, so without this the refusal leaves no trace and the machine asks
+	// again on its next sign-on.
+	revoked, err = f.RevokeDeviceKey(ctx, sn, key(9))
+	require.NoError(t, err)
+	assert.True(t, revoked)
+
+	// And it sticks: publishing that key is refused like any other tombstone.
+	refused, err := f.PublishDeviceKeys(ctx, sn, []DeviceKey{{BoxKey: key(9)}})
+	require.NoError(t, err)
+	assert.Len(t, refused, 1, "a denied device must not be able to publish itself")
+
+	// Revoking it again reports no change.
 	revoked, err = f.RevokeDeviceKey(ctx, sn, key(9))
 	require.NoError(t, err)
 	assert.False(t, revoked)
