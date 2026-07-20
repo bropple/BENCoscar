@@ -103,8 +103,17 @@ func (c *apiClient) connectionError(err error) error {
 		return notInGroupError(c.socketPath, adminGroupName())
 	}
 	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("no management socket at %s -- the server does not appear to be running. "+
-			"Check `systemctl status bencoscar`, or point elsewhere with --api", c.socketPath)
+		// A missing socket does NOT mean a dead server, and saying so sends
+		// someone to `systemctl status` for a service that is running perfectly.
+		// The likelier cause by far is a server on a TCP listener -- which every
+		// deployment is until API_LISTENER is switched over, so this is the first
+		// thing a fresh install hits.
+		return fmt.Errorf("no management socket at %s.\n"+
+			"  The server is most likely listening on TCP instead, which is the default\n"+
+			"  until API_LISTENER is changed. Point at it:\n"+
+			"\tbenco_admin <command> --api 127.0.0.1:8080\n"+
+			"  If it should be on a socket, check API_LISTENER in the server's environment,\n"+
+			"  and `systemctl status bencoscar` to confirm the service is up", c.socketPath)
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return fmt.Errorf("the management socket %s exists but nothing is listening on it, which usually "+

@@ -99,8 +99,15 @@ func TestMissingSocketErrorNamesTheServer(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error talking to a socket that does not exist")
 	}
-	if !strings.Contains(err.Error(), "does not appear to be running") {
-		t.Errorf("error = %v, want it to point at the server not running", err)
+	// The useful diagnosis is "you are probably on TCP", not "the server is
+	// down" -- a missing socket is what EVERY deployment looks like until
+	// API_LISTENER is switched over, and blaming the service sends people to
+	// systemctl for something that is running fine.
+	if !strings.Contains(err.Error(), "--api") {
+		t.Errorf("error = %v, want it to point at the TCP listener via --api", err)
+	}
+	if strings.Contains(err.Error(), "does not appear to be running") {
+		t.Errorf("error = %v, want it NOT to claim the server is down", err)
 	}
 	// The opposite diagnosis would send someone to fix their group membership
 	// when nothing is wrong with it.
