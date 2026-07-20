@@ -608,8 +608,11 @@ func roomRm(opts commonOpts, name string) error {
 					"  included -- can remove it. The server's store does implement deletion for the\n"+
 					"  private exchange, it is simply not routed.\n"+
 					"\n"+
+					// No trailing period: ST1005. The message is long-form operator
+					// guidance rather than a composable error fragment, but the
+					// convention still applies because it may be wrapped.
 					"  Removing it means acting on the server's database directly. The BENCchat\n"+
-					"  repository ships scripts/purge-rooms.sh for exactly this.",
+					"  repository ships scripts/purge-rooms.sh for exactly this",
 				name)
 		}
 	}

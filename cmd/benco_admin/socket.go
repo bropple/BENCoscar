@@ -166,8 +166,9 @@ func retryUnderSG(group string) error {
 			"permission denied connecting to the management socket, even after retrying under `sg %s`.\n"+
 				"Start a session that has the group for real:\n"+
 				"\tnewgrp %s\n"+
+				// No trailing period: ST1005, same as the long messages in main.go.
 				"or log out and back in, then try again. If that still fails, the socket's ownership is\n"+
-				"probably not what the installer set up -- check `ls -ld` on it and its directory.",
+				"probably not what the installer set up -- check `ls -ld` on it and its directory",
 			group, group)
 	}
 
