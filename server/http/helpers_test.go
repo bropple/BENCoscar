@@ -157,7 +157,10 @@ type chatRoomDeleterParams struct {
 type deleteChatRoomsParams []struct {
 	exchange uint16
 	names    []string
-	err      error
+	// count is how many rooms the store reports it actually deleted. Zero
+	// means nothing matched, which the handler answers with a 404.
+	count int
+	err   error
 }
 
 // chatSessionRetrieverParams is a helper struct that contains mock parameters for

@@ -1035,6 +1035,59 @@ func TestSQLiteUserStore_AllChatRooms(t *testing.T) {
 	assert.Equal(t, chatRooms[0:2], gotRooms)
 }
 
+// BENCO: DeleteChatRooms reports how many rooms it actually removed, so the
+// management API can tell a deletion apart from a request that matched nothing.
+func TestSQLiteUserStore_DeleteChatRooms_Count(t *testing.T) {
+	defer func() {
+		assert.NoError(t, os.Remove(testFile))
+	}()
+
+	userStore, err := NewSQLiteUserStore(testFile)
+	assert.NoError(t, err)
+
+	chatRooms := []ChatRoom{
+		NewChatRoom("room 1", NewIdentScreenName("creator"), PublicExchange),
+		NewChatRoom("room 2", NewIdentScreenName("creator"), PublicExchange),
+		NewChatRoom("room 3", NewIdentScreenName("creator"), PrivateExchange),
+	}
+	for i := range chatRooms {
+		assert.NoError(t, userStore.CreateChatRoom(context.Background(), &chatRooms[i]))
+	}
+
+	// no names at all deletes nothing
+	count, err := userStore.DeleteChatRooms(context.Background(), PublicExchange, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// a name that exists on a different exchange is not a match
+	count, err = userStore.DeleteChatRooms(context.Background(), PublicExchange, []string{"room 3"})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// a name that has never existed is not a match
+	count, err = userStore.DeleteChatRooms(context.Background(), PublicExchange, []string{"no such room"})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	// a partial match counts only the rooms that were really deleted
+	count, err = userStore.DeleteChatRooms(context.Background(), PublicExchange, []string{"room 1", "no such room"})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	// deleting the same room again matches nothing the second time
+	count, err = userStore.DeleteChatRooms(context.Background(), PublicExchange, []string{"room 1"})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+
+	count, err = userStore.DeleteChatRooms(context.Background(), PublicExchange, []string{"room 2"})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	remaining, err := userStore.AllChatRooms(context.Background(), PublicExchange)
+	assert.NoError(t, err)
+	assert.Empty(t, remaining)
+}
+
 func TestSQLiteUserStore_CreateChatRoom_ErrChatRoomExists(t *testing.T) {
 
 	tt := []struct {

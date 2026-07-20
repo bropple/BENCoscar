@@ -22,21 +22,31 @@ func (_m *mockChatRoomDeleter) EXPECT() *mockChatRoomDeleter_Expecter {
 }
 
 // DeleteChatRooms provides a mock function with given fields: ctx, exchange, names
-func (_m *mockChatRoomDeleter) DeleteChatRooms(ctx context.Context, exchange uint16, names []string) error {
+func (_m *mockChatRoomDeleter) DeleteChatRooms(ctx context.Context, exchange uint16, names []string) (int, error) {
 	ret := _m.Called(ctx, exchange, names)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteChatRooms")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, uint16, []string) error); ok {
+	var r0 int
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, uint16, []string) (int, error)); ok {
+		return rf(ctx, exchange, names)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, uint16, []string) int); ok {
 		r0 = rf(ctx, exchange, names)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(int)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, uint16, []string) error); ok {
+		r1 = rf(ctx, exchange, names)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // mockChatRoomDeleter_DeleteChatRooms_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteChatRooms'
@@ -59,12 +69,12 @@ func (_c *mockChatRoomDeleter_DeleteChatRooms_Call) Run(run func(ctx context.Con
 	return _c
 }
 
-func (_c *mockChatRoomDeleter_DeleteChatRooms_Call) Return(_a0 error) *mockChatRoomDeleter_DeleteChatRooms_Call {
-	_c.Call.Return(_a0)
+func (_c *mockChatRoomDeleter_DeleteChatRooms_Call) Return(_a0 int, _a1 error) *mockChatRoomDeleter_DeleteChatRooms_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *mockChatRoomDeleter_DeleteChatRooms_Call) RunAndReturn(run func(context.Context, uint16, []string) error) *mockChatRoomDeleter_DeleteChatRooms_Call {
+func (_c *mockChatRoomDeleter_DeleteChatRooms_Call) RunAndReturn(run func(context.Context, uint16, []string) (int, error)) *mockChatRoomDeleter_DeleteChatRooms_Call {
 	_c.Call.Return(run)
 	return _c
 }

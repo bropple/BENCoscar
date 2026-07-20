@@ -254,8 +254,8 @@ func deleteUserHandler(w http.ResponseWriter, r *http.Request, manager UserManag
 		return
 	}
 
+	// BENCO: no body — HTTP discards anything written after a 204.
 	w.WriteHeader(http.StatusNoContent)
-	_, _ = fmt.Fprintln(w, "User account successfully deleted.")
 }
 
 // putUserPasswordHandler handles the PUT /user/password endpoint.
@@ -283,8 +283,8 @@ func putUserPasswordHandler(w http.ResponseWriter, r *http.Request, userManager 
 		}
 	}
 
+	// BENCO: no body — HTTP discards anything written after a 204.
 	w.WriteHeader(http.StatusNoContent)
-	_, _ = fmt.Fprintln(w, "Password successfully reset.")
 }
 
 // getSessionHandler handles GET /session
@@ -621,15 +621,25 @@ func deletePublicChatHandler(w http.ResponseWriter, r *http.Request, chatRoomDel
 		return
 	}
 
-	err := chatRoomDeleter.DeleteChatRooms(r.Context(), state.PublicExchange, input.Names)
+	count, err := chatRoomDeleter.DeleteChatRooms(r.Context(), state.PublicExchange, input.Names)
 	if err != nil {
 		logger.Error("error deleting public chat rooms DELETE /chat/room/public", "err", err.Error())
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
+	// BENCO: a delete that matched nothing is not a success. Without this the
+	// endpoint answered 204 for rooms that never existed, so a typo'd or
+	// already-deleted name was indistinguishable from a real deletion.
+	if count == 0 {
+		http.Error(w, fmt.Sprintf("no public chat room found named %s", strings.Join(input.Names, ", ")), http.StatusNotFound)
+		return
+	}
+
+	// BENCO: no body — 204 means "no content", and HTTP discards anything
+	// written after this header, so a body here only ever misled the reader of
+	// this code.
 	w.WriteHeader(http.StatusNoContent)
-	_, _ = fmt.Fprintln(w, "Chat rooms deleted successfully.")
 }
 
 // writeUnescapeChatURL writes a JSON-encoded list of chat rooms with unescaped

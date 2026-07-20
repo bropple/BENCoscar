@@ -1532,9 +1532,16 @@ func (f SQLiteUserStore) AllChatRooms(ctx context.Context, exchange uint16) ([]C
 	return users, nil
 }
 
-func (f SQLiteUserStore) DeleteChatRooms(ctx context.Context, exchange uint16, names []string) error {
+// DeleteChatRooms deletes the named chat rooms on the given exchange and
+// returns how many rows actually matched.
+//
+// BENCO: this used to return only an error, which made "deleted 3 rooms" and
+// "matched nothing at all" indistinguishable to the caller — the management API
+// answered 204 either way. The count comes straight off the sql.Result that was
+// previously discarded, so callers can tell a real deletion from a no-op.
+func (f SQLiteUserStore) DeleteChatRooms(ctx context.Context, exchange uint16, names []string) (int, error) {
 	if len(names) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	// Build the query with placeholders for each name
@@ -1552,12 +1559,17 @@ func (f SQLiteUserStore) DeleteChatRooms(ctx context.Context, exchange uint16, n
 		WHERE exchange = ? AND name IN (%s)
 	`, strings.Join(placeholders, ","))
 
-	_, err := f.db.ExecContext(ctx, q, args...)
+	res, err := f.db.ExecContext(ctx, q, args...)
 	if err != nil {
-		return fmt.Errorf("DeleteChatRooms: %w", err)
+		return 0, fmt.Errorf("DeleteChatRooms: %w", err)
 	}
 
-	return nil
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("DeleteChatRooms: %w", err)
+	}
+
+	return int(rows), nil
 }
 
 func (f SQLiteUserStore) UpdateDisplayScreenName(ctx context.Context, displayScreenName DisplayScreenName) error {

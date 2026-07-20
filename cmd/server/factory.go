@@ -66,6 +66,16 @@ func MakeCommonDeps() (Container, error) {
 		return c, fmt.Errorf("unable to parse listener config: %s", err.Error())
 	}
 
+	// BENCO: checked before NewSQLiteUserStore, because sql.Open is what creates
+	// a missing database file. Guarding here rather than inside the store leaves
+	// cmd/webapi_keygen and every store test creating databases as they always
+	// have -- this is server-startup policy, and the config only reaches here.
+	if c.cfg.DBRequireExisting {
+		if err := state.RequireExistingDB(c.cfg.DBPath); err != nil {
+			return c, err
+		}
+	}
+
 	c.sqLiteUserStore, err = state.NewSQLiteUserStore(c.cfg.DBPath)
 	if err != nil {
 		return c, fmt.Errorf("unable to create feedbag store: %s", err.Error())

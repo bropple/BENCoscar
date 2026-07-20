@@ -1270,7 +1270,7 @@ func TestUserHandler_DELETE(t *testing.T) {
 		{
 			name:       "with valid user",
 			body:       `{"screen_name":"userA"}`,
-			want:       `User account successfully deleted.`,
+			want:       ``, // BENCO: 204 carries no body
 			statusCode: http.StatusNoContent,
 			mockParams: mockParams{
 				userManagerParams: userManagerParams{
@@ -1358,7 +1358,7 @@ func TestUserPasswordHandler_PUT(t *testing.T) {
 		{
 			name:       "user with valid password",
 			body:       `{"screen_name":"userA", "password":"thenewpassword"}`,
-			want:       `Password successfully reset.`,
+			want:       ``, // BENCO: 204 carries no body
 			statusCode: http.StatusNoContent,
 			mockParams: mockParams{
 				userManagerParams: userManagerParams{
@@ -1593,9 +1593,11 @@ func TestDeletePublicChatHandler(t *testing.T) {
 		mockParams mockParams
 	}{
 		{
-			name:       "successful deletion of single chat room",
-			body:       `{"names":["TestRoom"]}`,
-			want:       `Chat rooms deleted successfully.`,
+			name: "successful deletion of single chat room",
+			body: `{"names":["TestRoom"]}`,
+			// BENCO: 204 carries no body -- anything written after the header
+			// is discarded by HTTP, so the handler no longer writes one.
+			want:       ``,
 			statusCode: http.StatusNoContent,
 			mockParams: mockParams{
 				chatRoomDeleterParams: chatRoomDeleterParams{
@@ -1603,6 +1605,7 @@ func TestDeletePublicChatHandler(t *testing.T) {
 						{
 							exchange: state.PublicExchange,
 							names:    []string{"TestRoom"},
+							count:    1,
 						},
 					},
 				},
@@ -1611,7 +1614,7 @@ func TestDeletePublicChatHandler(t *testing.T) {
 		{
 			name:       "successful deletion of multiple chat rooms",
 			body:       `{"names":["Room1", "Room2", "Room3"]}`,
-			want:       `Chat rooms deleted successfully.`,
+			want:       ``,
 			statusCode: http.StatusNoContent,
 			mockParams: mockParams{
 				chatRoomDeleterParams: chatRoomDeleterParams{
@@ -1619,6 +1622,44 @@ func TestDeletePublicChatHandler(t *testing.T) {
 						{
 							exchange: state.PublicExchange,
 							names:    []string{"Room1", "Room2", "Room3"},
+							count:    3,
+						},
+					},
+				},
+			},
+		},
+		{
+			// BENCO: a delete that matched no rows used to answer 204, making a
+			// nonexistent room indistinguishable from a real deletion.
+			name:       "deletion of a chat room that does not exist",
+			body:       `{"names":["NoSuchRoom"]}`,
+			want:       `no public chat room found named NoSuchRoom`,
+			statusCode: http.StatusNotFound,
+			mockParams: mockParams{
+				chatRoomDeleterParams: chatRoomDeleterParams{
+					deleteChatRoomsParams: deleteChatRoomsParams{
+						{
+							exchange: state.PublicExchange,
+							names:    []string{"NoSuchRoom"},
+							count:    0,
+						},
+					},
+				},
+			},
+		},
+		{
+			// A partial match is still a deletion; only zero rows is a 404.
+			name:       "deletion where only some rooms exist",
+			body:       `{"names":["RealRoom", "NoSuchRoom"]}`,
+			want:       ``,
+			statusCode: http.StatusNoContent,
+			mockParams: mockParams{
+				chatRoomDeleterParams: chatRoomDeleterParams{
+					deleteChatRoomsParams: deleteChatRoomsParams{
+						{
+							exchange: state.PublicExchange,
+							names:    []string{"RealRoom", "NoSuchRoom"},
+							count:    1,
 						},
 					},
 				},
@@ -1647,6 +1688,7 @@ func TestDeletePublicChatHandler(t *testing.T) {
 						{
 							exchange: state.PublicExchange,
 							names:    []string{"TestRoom"},
+							count:    0,
 							err:      errors.New("database error"),
 						},
 					},
@@ -1664,7 +1706,7 @@ func TestDeletePublicChatHandler(t *testing.T) {
 			for _, params := range tc.mockParams.deleteChatRoomsParams {
 				chatRoomDeleter.EXPECT().
 					DeleteChatRooms(matchContext(), params.exchange, params.names).
-					Return(params.err)
+					Return(params.count, params.err)
 			}
 
 			deletePublicChatHandler(responseRecorder, request, chatRoomDeleter, slog.Default())

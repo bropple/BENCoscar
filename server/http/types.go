@@ -69,8 +69,12 @@ type ChatRoomRetriever interface {
 
 // ChatRoomDeleter defines a method for deleting chat rooms.
 type ChatRoomDeleter interface {
-	// DeleteChatRooms deletes chat rooms by their names under a specific exchange.
-	DeleteChatRooms(ctx context.Context, exchange uint16, names []string) error
+	// DeleteChatRooms deletes chat rooms by their names under a specific
+	// exchange and returns the number of rooms actually deleted.
+	//
+	// BENCO: the count exists so a handler can distinguish a deletion from a
+	// request that matched nothing, rather than reporting success either way.
+	DeleteChatRooms(ctx context.Context, exchange uint16, names []string) (int, error)
 }
 
 // ChatSessionRetriever defines a method for retrieving all sessions
