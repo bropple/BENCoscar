@@ -2791,6 +2791,15 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 						},
 					},
 				},
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					// AIM↔AIM removal revokes pre-auth in both directions per buddy.
+					revokePreAuthParams: revokePreAuthParams{
+						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy1")},
+						{owner: state.NewIdentScreenName("buddy1"), authorized: state.NewIdentScreenName("me")},
+						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy2")},
+						{owner: state.NewIdentScreenName("buddy2"), authorized: state.NewIdentScreenName("me")},
+					},
+				},
 				buddyBroadcasterParams: buddyBroadcasterParams{
 					broadcastVisibilityParams: broadcastVisibilityParams{
 						{
@@ -2880,6 +2889,12 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 						},
 					},
 				},
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					revokePreAuthParams: revokePreAuthParams{
+						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy1")},
+						{owner: state.NewIdentScreenName("buddy1"), authorized: state.NewIdentScreenName("me")},
+					},
+				},
 				messageRelayerParams: messageRelayerParams{
 					relayToOtherInstancesParams: relayToOtherInstancesParams{
 						{
@@ -2920,6 +2935,153 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 				assert.True(t, instance.InNotifyTxn())
 			},
 		},
+		{
+			// ICQ authorization is one-directional and stays that way on removal:
+			// deleting an ICQ buddy must NOT revoke pre-auth. An empty
+			// revokePreAuthParams asserts the mock is never called.
+			name:     "delete ICQ buddy does not revoke pre-auth",
+			instance: newTestInstance("100001", sessOptUIN(100001)),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagDeleteItem,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+					Items: []wire.FeedbagItem{
+						{ClassID: wire.FeedbagClassIdBuddy, Name: "100002"},
+					},
+				},
+			},
+			mockParams: mockParams{
+				feedbagManagerParams: feedbagManagerParams{
+					feedbagDeleteParams: feedbagDeleteParams{
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							items: []wire.FeedbagItem{
+								{ClassID: wire.FeedbagClassIdBuddy, Name: "100002"},
+							},
+						},
+					},
+				},
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastVisibilityParams: broadcastVisibilityParams{
+						{
+							from:   state.NewIdentScreenName("100001"),
+							filter: []state.IdentScreenName{state.NewIdentScreenName("100002")},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToOtherInstancesParams: relayToOtherInstancesParams{
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagDeleteItem,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+									Items: []wire.FeedbagItem{
+										{ClassID: wire.FeedbagClassIdBuddy, Name: "100002"},
+									},
+								},
+							},
+						},
+					},
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagStatus,
+									RequestID: 1234,
+								},
+								Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+									Results: []uint16{0x0000},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
+		},
+		{
+			// AIM deleter removing an ICQ buddy is a cross-namespace pair, not
+			// AIM↔AIM, so revoke must NOT fire. Empty revokePreAuthParams asserts it.
+			name:     "delete ICQ buddy from AIM list does not revoke pre-auth",
+			instance: newTestInstance("me"),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagDeleteItem,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+					Items: []wire.FeedbagItem{
+						{ClassID: wire.FeedbagClassIdBuddy, Name: "100002"},
+					},
+				},
+			},
+			mockParams: mockParams{
+				feedbagManagerParams: feedbagManagerParams{
+					feedbagDeleteParams: feedbagDeleteParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							items: []wire.FeedbagItem{
+								{ClassID: wire.FeedbagClassIdBuddy, Name: "100002"},
+							},
+						},
+					},
+				},
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastVisibilityParams: broadcastVisibilityParams{
+						{
+							from:   state.NewIdentScreenName("me"),
+							filter: []state.IdentScreenName{state.NewIdentScreenName("100002")},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToOtherInstancesParams: relayToOtherInstancesParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagDeleteItem,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+									Items: []wire.FeedbagItem{
+										{ClassID: wire.FeedbagClassIdBuddy, Name: "100002"},
+									},
+								},
+							},
+						},
+					},
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagStatus,
+									RequestID: 1234,
+								},
+								Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+									Results: []uint16{0x0000},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
+		},
 	}
 
 	for _, tc := range cases {
@@ -2945,11 +3107,16 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 				messageRelayer.EXPECT().
 					RelayToSelf(mock.Anything, mock.Anything, params.message)
 			}
+			contactPreAuth := newMockContactPreAuthorizer(t)
+			for _, params := range tc.mockParams.revokePreAuthParams {
+				contactPreAuth.EXPECT().RevokePreAuth(matchContext(), params.owner, params.authorized).Return(params.err)
+			}
 
 			svc := FeedbagService{
-				buddyBroadcaster: buddyUpdateBroadcast,
-				feedbagManager:   feedbagManager,
-				messageRelayer:   messageRelayer,
+				buddyBroadcaster:     buddyUpdateBroadcast,
+				feedbagManager:       feedbagManager,
+				messageRelayer:       messageRelayer,
+				contactPreAuthorizer: contactPreAuth,
 			}
 			output, err := svc.DeleteItem(context.Background(), tc.instance, tc.inputSNAC.Frame,
 				tc.inputSNAC.Body.(wire.SNAC_0x13_0x0A_FeedbagDeleteItem))
@@ -4851,7 +5018,12 @@ func TestFeedbagService_notifyTxnCluster(t *testing.T) {
 			Return(nil).
 			Once()
 
-		svc := NewFeedbagService(slog.Default(), messageRelayer, feedbagManager, nil, nil, nil, nil, nil, newMockBuddyAddedNotifierDeduper(t))
+		// AIM↔AIM removal revokes pre-auth in both directions.
+		contactPreAuth := newMockContactPreAuthorizer(t)
+		contactPreAuth.EXPECT().RevokePreAuth(matchContext(), me, buddy1).Return(nil).Once()
+		contactPreAuth.EXPECT().RevokePreAuth(matchContext(), buddy1, me).Return(nil).Once()
+
+		svc := NewFeedbagService(slog.Default(), messageRelayer, feedbagManager, nil, nil, nil, contactPreAuth, nil, newMockBuddyAddedNotifierDeduper(t))
 		svc.buddyBroadcaster = buddyBroadcaster
 
 		svc.StartCluster(context.Background(), instance, startFrame, startBody)

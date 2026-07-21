@@ -128,6 +128,11 @@ type ContactPreAuthorizer interface {
 	// owner as a buddy without an authorization prompt. No-ops when either
 	// user is not registered.
 	RecordPreAuth(ctx context.Context, owner, requester state.IdentScreenName) error
+
+	// RevokePreAuth removes owner's pre-authorization grant to authorized,
+	// re-gating contact and messaging between them until it is re-established.
+	// No-ops when no such grant exists.
+	RevokePreAuth(ctx context.Context, owner, authorized state.IdentScreenName) error
 }
 
 // BuddyAddedNotifierDeduper suppresses duplicate "you were added" notifications.

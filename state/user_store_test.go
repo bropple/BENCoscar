@@ -4369,3 +4369,61 @@ func TestSQLiteUserStore_RecordPreAuth_unknownUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
+
+func TestSQLiteUserStore_RevokePreAuth(t *testing.T) {
+	ctx := context.Background()
+	defer func() {
+		assert.NoError(t, os.Remove(testFile))
+	}()
+
+	f, err := NewSQLiteUserStore(testFile)
+	require.NoError(t, err)
+
+	// Both require authorization so RequiresAuthorization reflects grant state
+	// in each direction.
+	owner := NewIdentScreenName("100001")
+	requester := NewIdentScreenName("100002")
+
+	require.NoError(t, f.InsertUser(ctx, User{
+		IdentScreenName:   owner,
+		DisplayScreenName: DisplayScreenName("100001"),
+		IsICQ:             true,
+		ICQInfo: ICQInfo{
+			Permissions: ICQPermissions{AuthRequired: true},
+		},
+	}))
+	require.NoError(t, f.InsertUser(ctx, User{
+		IdentScreenName:   requester,
+		DisplayScreenName: DisplayScreenName("100002"),
+		IsICQ:             true,
+		ICQInfo: ICQInfo{
+			Permissions: ICQPermissions{AuthRequired: true},
+		},
+	}))
+
+	// Grant in both directions, then revoke and confirm each grant is gone.
+	require.NoError(t, f.RecordPreAuth(ctx, owner, requester))
+	require.NoError(t, f.RecordPreAuth(ctx, requester, owner))
+
+	blocked, err := f.RequiresAuthorization(ctx, owner, requester)
+	require.NoError(t, err)
+	assert.False(t, blocked)
+
+	require.NoError(t, f.RevokePreAuth(ctx, owner, requester))
+	blocked, err = f.RequiresAuthorization(ctx, owner, requester)
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	// The reverse grant is unaffected until it too is revoked.
+	blocked, err = f.RequiresAuthorization(ctx, requester, owner)
+	require.NoError(t, err)
+	assert.False(t, blocked)
+
+	require.NoError(t, f.RevokePreAuth(ctx, requester, owner))
+	blocked, err = f.RequiresAuthorization(ctx, requester, owner)
+	require.NoError(t, err)
+	assert.True(t, blocked)
+
+	// Revoking a grant that does not exist is a no-op, not an error.
+	require.NoError(t, f.RevokePreAuth(ctx, owner, requester))
+}

@@ -101,6 +101,69 @@ func (_c *mockContactPreAuthorizer_RecordPreAuth_Call) RunAndReturn(run func(ctx
 	return _c
 }
 
+// RevokePreAuth provides a mock function for the type mockContactPreAuthorizer
+func (_mock *mockContactPreAuthorizer) RevokePreAuth(ctx context.Context, owner state.IdentScreenName, authorized state.IdentScreenName) error {
+	ret := _mock.Called(ctx, owner, authorized)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RevokePreAuth")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, state.IdentScreenName, state.IdentScreenName) error); ok {
+		r0 = returnFunc(ctx, owner, authorized)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// mockContactPreAuthorizer_RevokePreAuth_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RevokePreAuth'
+type mockContactPreAuthorizer_RevokePreAuth_Call struct {
+	*mock.Call
+}
+
+// RevokePreAuth is a helper method to define mock.On call
+//   - ctx context.Context
+//   - owner state.IdentScreenName
+//   - authorized state.IdentScreenName
+func (_e *mockContactPreAuthorizer_Expecter) RevokePreAuth(ctx interface{}, owner interface{}, authorized interface{}) *mockContactPreAuthorizer_RevokePreAuth_Call {
+	return &mockContactPreAuthorizer_RevokePreAuth_Call{Call: _e.mock.On("RevokePreAuth", ctx, owner, authorized)}
+}
+
+func (_c *mockContactPreAuthorizer_RevokePreAuth_Call) Run(run func(ctx context.Context, owner state.IdentScreenName, authorized state.IdentScreenName)) *mockContactPreAuthorizer_RevokePreAuth_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 state.IdentScreenName
+		if args[1] != nil {
+			arg1 = args[1].(state.IdentScreenName)
+		}
+		var arg2 state.IdentScreenName
+		if args[2] != nil {
+			arg2 = args[2].(state.IdentScreenName)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *mockContactPreAuthorizer_RevokePreAuth_Call) Return(err error) *mockContactPreAuthorizer_RevokePreAuth_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *mockContactPreAuthorizer_RevokePreAuth_Call) RunAndReturn(run func(ctx context.Context, owner state.IdentScreenName, authorized state.IdentScreenName) error) *mockContactPreAuthorizer_RevokePreAuth_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RequiresAuthorization provides a mock function for the type mockContactPreAuthorizer
 func (_mock *mockContactPreAuthorizer) RequiresAuthorization(ctx context.Context, owner state.IdentScreenName, requester state.IdentScreenName) (bool, error) {
 	ret := _mock.Called(ctx, owner, requester)

@@ -41,6 +41,7 @@ type mockParams struct {
 type contactPreAuthorizerParams struct {
 	recordPreAuthParams
 	requiresAuthorizationParams
+	revokePreAuthParams
 }
 
 // recordPreAuthParams is the list of parameters passed at the mock
@@ -49,6 +50,14 @@ type recordPreAuthParams []struct {
 	owner state.IdentScreenName
 	buddy state.IdentScreenName
 	err   error
+}
+
+// revokePreAuthParams is the list of parameters passed at the mock
+// ContactPreAuthorizer.RevokePreAuth call site
+type revokePreAuthParams []struct {
+	owner      state.IdentScreenName
+	authorized state.IdentScreenName
+	err        error
 }
 
 // requiresAuthorizationParams is the list of parameters passed at the mock

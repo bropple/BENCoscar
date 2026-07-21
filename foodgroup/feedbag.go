@@ -535,6 +535,26 @@ func (s *FeedbagService) DeleteItem(ctx context.Context, instance *state.Session
 		case wire.FeedbagClassIdBuddy, wire.FeedbagClassIDDeny, wire.FeedbagClassIDPermit:
 			filter = append(filter, state.NewIdentScreenName(item.Name))
 		}
+
+		if item.ClassID == wire.FeedbagClassIdBuddy {
+			buddy := state.NewIdentScreenName(item.Name)
+			// BENCO: revoke pre-authorization when an AIM buddy is removed so the
+			// removed party can no longer add or message the remover (the gate in
+			// icbm.go ChannelMsgToHost consults RequiresAuthorization). Adding an
+			// AIM connection is mutual (RespondAuthorizeToHost records a reciprocal
+			// grant), so removal is mutual too: drop the grant in BOTH directions,
+			// (deleter→buddy) and (buddy→deleter), so neither can message the other
+			// until they reconnect. Scoped strictly to AIM↔AIM (both UIN == 0),
+			// exactly like the UpsertItem gate — ICQ relationships are untouched.
+			if instance.UIN() == 0 && buddy.UIN() == 0 {
+				if err := s.contactPreAuthorizer.RevokePreAuth(ctx, instance.IdentScreenName(), buddy); err != nil {
+					return nil, fmt.Errorf("contactPreAuthorizer.RevokePreAuth: %w", err)
+				}
+				if err := s.contactPreAuthorizer.RevokePreAuth(ctx, buddy, instance.IdentScreenName()); err != nil {
+					return nil, fmt.Errorf("reciprocal RevokePreAuth: %w", err)
+				}
+			}
+		}
 	}
 
 	if instance.InNotifyTxn() {

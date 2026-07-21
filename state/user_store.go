@@ -586,6 +586,23 @@ func (f SQLiteUserStore) RecordPreAuth(ctx context.Context, owner, requester Ide
 	return nil
 }
 
+// RevokePreAuth removes a pre-authorization grant from owner to authorized,
+// re-gating contact and messaging between them until it is re-established.
+// No-ops when no such grant exists. The operation is idempotent.
+func (f SQLiteUserStore) RevokePreAuth(ctx context.Context, owner, authorized IdentScreenName) error {
+	_, err := f.db.ExecContext(ctx,
+		`DELETE FROM contactPreauth WHERE ownerScreenName = ? AND authorizedScreenName = ?`,
+		owner.String(), authorized.String(),
+	)
+	if err != nil {
+		if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == lib.SQLITE_CONSTRAINT_FOREIGNKEY {
+			return nil
+		}
+		return fmt.Errorf("RevokePreAuth: %w", err)
+	}
+	return nil
+}
+
 // HasBuddyAddedNotification reports whether the server has already sent a
 // "you were added" notification for requester being added by granter.
 func (f SQLiteUserStore) HasBuddyAddedNotification(ctx context.Context, granter, requester IdentScreenName) (bool, error) {
