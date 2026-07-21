@@ -240,10 +240,105 @@ func (f SQLiteUserStore) IdentityBackup(ctx context.Context, screenName IdentScr
 // not need to: it is storing opaque ciphertext either way, and what actually
 // distinguishes them is whether the manifests that follow are signed by the same
 // identity key.
+// The row it replaces is archived first. REPLACE INTO on its own made this a
+// destructive write against the ONLY copy of an account's identity key -- and it
+// is reachable by anyone holding the account password, since the server cannot
+// tell a re-key from a hostile replacement. Losing that key does not break
+// existing devices, but it means no manifest can ever be signed again, so the
+// device set is frozen for the life of the account. Archiving makes that
+// recoverable by an operator; see migration 0038 for why prevention does not
+// belong here.
 func (f SQLiteUserStore) SetIdentityBackup(ctx context.Context, screenName IdentScreenName, b IdentityBackup) error {
-	_, err := f.db.ExecContext(ctx, `
+	tx, err := f.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().Unix()
+
+	// Archive whatever is there. No row means the account is bootstrapping and
+	// there is nothing to keep, which is the common case and not an error.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO keyDirIdentityBackupHistory
+			(identScreenName, kdf, params, salt, blob, updatedAt, supersededAt)
+		SELECT identScreenName, kdf, params, salt, blob, updatedAt, ?
+		FROM keyDirIdentityBackups WHERE identScreenName = ?`,
+		now, screenName.String()); err != nil {
+		return err
+	}
+
+	// Keep the archive bounded. Every retained row is the same identity key
+	// wrapped under a phrase that has since been retired -- sometimes retired
+	// BECAUSE it may have been seen -- so holding them forever slowly widens what
+	// a stolen database is worth, and the recovery this exists for uses the most
+	// recent ones.
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM keyDirIdentityBackupHistory
+		WHERE identScreenName = ? AND id NOT IN (
+			SELECT id FROM keyDirIdentityBackupHistory
+			WHERE identScreenName = ? ORDER BY id DESC LIMIT ?
+		)`,
+		screenName.String(), screenName.String(), identityBackupHistoryDepth); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
 		REPLACE INTO keyDirIdentityBackups (identScreenName, kdf, params, salt, blob, updatedAt)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		screenName.String(), b.KDF, b.Params, b.Salt, b.Blob, time.Now().Unix())
-	return err
+		screenName.String(), b.KDF, b.Params, b.Salt, b.Blob, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// identityBackupHistoryDepth is how many superseded identity backups are kept
+// per account. Deep enough to survive an attacker overwriting repeatedly to push
+// the good row out, shallow enough that retired recovery phrases do not
+// accumulate indefinitely.
+const identityBackupHistoryDepth = 20
+
+// SupersededIdentityBackup is an identity backup that has since been replaced.
+type SupersededIdentityBackup struct {
+	IdentityBackup
+	// SupersededAt is when this row stopped being the live one. UpdatedAt, on the
+	// embedded backup, is when it was written -- together they bound the window
+	// in which this was the account's identity.
+	SupersededAt time.Time
+}
+
+// IdentityBackupHistory returns an account's superseded identity backups, most
+// recently replaced first.
+//
+// Deliberately NOT reachable over the wire. Nothing a client can authenticate as
+// should be able to enumerate old wrappings of an identity key: a password-holder
+// is exactly the attacker this exists to recover FROM, and handing them older
+// ciphertexts to grind offline would trade the fix for a wider hole. This is for
+// an operator with database access, restoring by hand after establishing what
+// happened.
+func (f SQLiteUserStore) IdentityBackupHistory(ctx context.Context, screenName IdentScreenName) ([]SupersededIdentityBackup, error) {
+	rows, err := f.db.QueryContext(ctx, `
+		SELECT kdf, params, salt, blob, updatedAt, supersededAt
+		FROM keyDirIdentityBackupHistory
+		WHERE identScreenName = ?
+		ORDER BY id DESC`, screenName.String())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SupersededIdentityBackup
+	for rows.Next() {
+		var (
+			b                       SupersededIdentityBackup
+			updatedAt, supersededAt int64
+		)
+		if err := rows.Scan(&b.KDF, &b.Params, &b.Salt, &b.Blob, &updatedAt, &supersededAt); err != nil {
+			return nil, err
+		}
+		b.UpdatedAt = time.Unix(updatedAt, 0)
+		b.SupersededAt = time.Unix(supersededAt, 0)
+		out = append(out, b)
+	}
+	return out, rows.Err()
 }

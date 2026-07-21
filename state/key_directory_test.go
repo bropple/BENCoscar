@@ -351,3 +351,93 @@ func TestKeyDirectory_SentinelErrorsAreDistinct(t *testing.T) {
 	assert.False(t, errors.Is(ErrStaleCounter, ErrCounterOutOfRange))
 	assert.False(t, errors.Is(ErrCounterOutOfRange, ErrStaleCounter))
 }
+
+// TestKeyDirectory_ReplacedBackupIsArchived: replacing a backup destroys the
+// only copy of an account's identity key, and any password-holder can do it. The
+// server cannot tell that apart from a legitimate re-key, so it keeps the old
+// row instead of trying to refuse.
+func TestKeyDirectory_ReplacedBackupIsArchived(t *testing.T) {
+	f, sns := newKeyDirStore(t, "me")
+	ctx := context.Background()
+
+	history, err := f.IdentityBackupHistory(ctx, sns[0])
+	require.NoError(t, err)
+	assert.Empty(t, history, "an account that never re-keyed should have no history")
+
+	original := IdentityBackup{KDF: 1, Params: []byte("p1"), Salt: []byte("s1"), Blob: []byte("the-real-identity")}
+	require.NoError(t, f.SetIdentityBackup(ctx, sns[0], original))
+
+	// Bootstrapping replaced nothing, so still no history.
+	history, err = f.IdentityBackupHistory(ctx, sns[0])
+	require.NoError(t, err)
+	assert.Empty(t, history)
+
+	// A password-holder overwrites it with an identity of their own.
+	require.NoError(t, f.SetIdentityBackup(ctx, sns[0], IdentityBackup{
+		KDF: 1, Params: []byte("p2"), Salt: []byte("s2"), Blob: []byte("attacker-identity"),
+	}))
+
+	got, err := f.IdentityBackup(ctx, sns[0])
+	require.NoError(t, err)
+	assert.Equal(t, []byte("attacker-identity"), got.Blob, "the live row should be the new one")
+
+	history, err = f.IdentityBackupHistory(ctx, sns[0])
+	require.NoError(t, err)
+	require.Len(t, history, 1, "the destroyed identity must be recoverable")
+	assert.Equal(t, original.Blob, history[0].Blob)
+	assert.Equal(t, original.Salt, history[0].Salt)
+	assert.Equal(t, original.Params, history[0].Params)
+	assert.False(t, history[0].SupersededAt.IsZero())
+}
+
+// TestKeyDirectory_BackupHistoryIsBoundedAndOrdered: an attacker who overwrites
+// repeatedly must not be able to push the good row out of the archive, and the
+// archive must not grow without limit -- every retained row is the identity key
+// under a phrase that has since been retired.
+func TestKeyDirectory_BackupHistoryIsBoundedAndOrdered(t *testing.T) {
+	f, sns := newKeyDirStore(t, "me")
+	ctx := context.Background()
+
+	total := identityBackupHistoryDepth + 5
+	for i := 0; i < total; i++ {
+		require.NoError(t, f.SetIdentityBackup(ctx, sns[0], IdentityBackup{
+			KDF: 1, Params: []byte("p"), Salt: []byte("s"), Blob: []byte{byte(i)},
+		}))
+	}
+
+	history, err := f.IdentityBackupHistory(ctx, sns[0])
+	require.NoError(t, err)
+	require.Len(t, history, identityBackupHistoryDepth, "the archive is capped")
+
+	// Newest first, and the newest archived row is the one written just before
+	// the live one.
+	assert.Equal(t, []byte{byte(total - 2)}, history[0].Blob)
+	for i := 1; i < len(history); i++ {
+		assert.Equal(t, []byte{byte(total - 2 - i)}, history[i].Blob)
+	}
+}
+
+// TestKeyDirectory_BackupHistoryIsPerAccount: one account's archive must not
+// leak into another's.
+func TestKeyDirectory_BackupHistoryIsPerAccount(t *testing.T) {
+	f, sns := newKeyDirStore(t, "me", "you")
+	ctx := context.Background()
+
+	for _, blob := range []string{"mine-1", "mine-2"} {
+		require.NoError(t, f.SetIdentityBackup(ctx, sns[0], IdentityBackup{
+			KDF: 1, Params: []byte("p"), Salt: []byte("s"), Blob: []byte(blob),
+		}))
+	}
+	require.NoError(t, f.SetIdentityBackup(ctx, sns[1], IdentityBackup{
+		KDF: 1, Params: []byte("p"), Salt: []byte("s"), Blob: []byte("yours"),
+	}))
+
+	mine, err := f.IdentityBackupHistory(ctx, sns[0])
+	require.NoError(t, err)
+	require.Len(t, mine, 1)
+	assert.Equal(t, []byte("mine-1"), mine[0].Blob)
+
+	yours, err := f.IdentityBackupHistory(ctx, sns[1])
+	require.NoError(t, err)
+	assert.Empty(t, yours, "bootstrapping replaced nothing")
+}
