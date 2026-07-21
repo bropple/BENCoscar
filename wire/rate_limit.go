@@ -58,13 +58,33 @@ func DefaultRateLimitClasses() RateLimitClasses {
 				MaxLevel:        6000,
 			},
 			{
+				// BENCO: retuned for rooms, for the same reason class 3 was retuned
+				// for messages — and this one was missed the first time round.
+				//
+				// This class carries ChatChannelMsgToHost, so it governs every word
+				// said in every chat room. Upstream's numbers throttled it HARDER
+				// than 1:1 messaging: LimitLevel 1500 is one message every 1.5
+				// seconds sustained, against class 3's one per second. A room is
+				// where fast back-and-forth actually happens, so that is backwards.
+				//
+				// WindowSize stays at 80 rather than dropping to class 3's 20. The
+				// wide window is what makes the burst allowance large — the average
+				// moves 1/80th per send instead of 1/20th — and rooms want burst:
+				// group conversation arrives in flurries, and the chain-view
+				// broadcasts BENCchat uses to re-key a room chunk into several
+				// back-to-back sends when the room is large.
+				//
+				// Now ~1 message/sec sustained, matching messages, with ~215 in a
+				// burst (15000 × 0.9875ⁿ < 1000 → n ≈ 215) against roughly 110
+				// before. Faster sustained AND twice the burst. DisconnectLevel is
+				// the genuine-abuse floor, as in class 3.
 				ID:              2,
 				WindowSize:      80,
-				ClearLevel:      3000,
-				AlertLevel:      2000,
-				LimitLevel:      1500,
-				DisconnectLevel: 1000,
-				MaxLevel:        6000,
+				ClearLevel:      1500,
+				AlertLevel:      1200,
+				LimitLevel:      1000,
+				DisconnectLevel: 100,
+				MaxLevel:        15000,
 			},
 			{
 				// BENCO: retuned for humans. This class carries ICBM sends and profile
