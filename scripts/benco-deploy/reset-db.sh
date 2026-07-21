@@ -11,11 +11,16 @@
 # and passwords cannot be recovered from what is removed. Accounts must be
 # created again through the management API.
 #
-#   --keep-accounts   preserve the users table, wipe everything else
-#   --dry-run         show what would happen, change nothing
-#   --yes             skip the confirmation
+#   --keep-accounts       preserve the users table, wipe everything else
+#   --clear-connections   drop only AIM buddy connections + their authorizations,
+#                         keeping accounts, device keys, identity backups and
+#                         rooms. Use this to clear grandfathered (pre-consent)
+#                         connections so every add re-runs the authorization flow.
+#   --dry-run             show what would happen, change nothing
+#   --yes                 skip the confirmation
 #
-# The database is MOVED, not deleted, so a mistaken run is recoverable.
+# The database is MOVED (or, for the surgical modes, COPIED) aside first, so a
+# mistaken run is recoverable.
 
 set -euo pipefail
 
@@ -25,6 +30,7 @@ SERVICE="${SERVICE:-bencoscar}"
 API_PORT="${API_PORT:-8080}"
 
 KEEP_ACCOUNTS=0
+CLEAR_CONNECTIONS=0
 DRY_RUN=0
 ASSUME_YES=0
 
@@ -35,13 +41,17 @@ die()  { printf '\n\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep-accounts) KEEP_ACCOUNTS=1 ;;
+    --clear-connections) CLEAR_CONNECTIONS=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --yes|-y)  ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1  (try --help)" ;;
   esac
   shift
 done
+
+[ "$KEEP_ACCOUNTS" -eq 1 ] && [ "$CLEAR_CONNECTIONS" -eq 1 ] &&
+  die "--keep-accounts and --clear-connections are mutually exclusive"
 
 [ "$(id -u)" -eq 0 ] || die "Run this with sudo:  sudo ./reset-db.sh"
 [ -f "$DB_PATH" ] || die "No database at $DB_PATH
@@ -58,13 +68,26 @@ say "BENCoscar database reset"
 echo "    service   : $SERVICE"
 echo "    database  : $DB_PATH  ($SIZE)"
 echo "    accounts  : $ACCOUNTS"
-if [ "$KEEP_ACCOUNTS" -eq 1 ]; then
+if [ "$CLEAR_CONNECTIONS" -eq 1 ]; then
+  echo "    mode      : clear AIM connections only (accounts + keys kept)"
+elif [ "$KEEP_ACCOUNTS" -eq 1 ]; then
   echo "    mode      : keep accounts, wipe everything else"
 else
   echo "    mode      : full wipe"
 fi
 
-if [ "$KEEP_ACCOUNTS" -eq 0 ]; then
+if [ "$CLEAR_CONNECTIONS" -eq 1 ]; then
+  cat <<'CLEARS'
+     Drops every AIM buddy edge and every AIM<->AIM authorization grant, so
+     rosters start empty and each future add re-runs the consent flow. Accounts,
+     argon2id passwords, published device keys, identity backups, chat rooms and
+     ICQ authorizations are all kept. Clients pull their roster from the server
+     on sign-on, so buddies simply disappear until re-added; no re-provisioning,
+     no first-run setup, no safety-number churn.
+CLEARS
+fi
+
+if [ "$KEEP_ACCOUNTS" -eq 0 ] && [ "$CLEAR_CONNECTIONS" -eq 0 ]; then
   warn "This destroys every account."
   cat <<'GONE'
      Screen names, password hashes, buddy lists, chat rooms, offline messages
@@ -77,8 +100,9 @@ if [ "$KEEP_ACCOUNTS" -eq 0 ]; then
 GONE
 fi
 
-if [ "$KEEP_ACCOUNTS" -eq 1 ] && ! command -v sqlite3 >/dev/null 2>&1; then
-  die "--keep-accounts needs sqlite3:  apt-get install -y sqlite3"
+if { [ "$KEEP_ACCOUNTS" -eq 1 ] || [ "$CLEAR_CONNECTIONS" -eq 1 ]; } &&
+   ! command -v sqlite3 >/dev/null 2>&1; then
+  die "this mode needs sqlite3:  apt-get install -y sqlite3"
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -102,7 +126,28 @@ systemctl stop "$SERVICE" || warn "service was not running"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="$DB_PATH.backup-$STAMP"
 
-if [ "$KEEP_ACCOUNTS" -eq 1 ]; then
+if [ "$CLEAR_CONNECTIONS" -eq 1 ]; then
+  say "Clearing AIM connections and their authorization grants"
+  cp -a "$DB_PATH" "$BACKUP"
+  # Two things define an AIM connection: the buddy edge in the feedbag, and the
+  # reciprocal rows in contactPreauth that RequiresAuthorization consults. Drop
+  # both, scoped to AIM<->AIM (both ends isICQ = 0) so ICQ's real authorization
+  # grants are left intact. Group rows (classID = 1) are harmless empty folders
+  # and are left alone. Mirrors the grandfather migration's scope, in reverse.
+  DELETED="$(sqlite3 "$DB_PATH" <<'SQL'
+PRAGMA foreign_keys = ON;
+DELETE FROM contactPreauth
+ WHERE ownerScreenName      IN (SELECT identScreenName FROM users WHERE isICQ = 0)
+   AND authorizedScreenName IN (SELECT identScreenName FROM users WHERE isICQ = 0);
+DELETE FROM feedbag
+ WHERE classID = 0
+   AND screenName IN (SELECT identScreenName FROM users WHERE isICQ = 0);
+SELECT changes();
+SQL
+)"
+  echo "    AIM buddy edges + authorizations cleared (feedbag rows removed: $DELETED)"
+  echo "    accounts, device keys, identity backups, rooms and ICQ grants kept"
+elif [ "$KEEP_ACCOUNTS" -eq 1 ]; then
   say "Preserving accounts, clearing everything else"
   cp -a "$DB_PATH" "$BACKUP"
   # Every other table is derived state that clients rebuild: buddy lists come
@@ -151,7 +196,7 @@ $(printf '\033[1;32m==>\033[0m') Done. The old database is kept at:
 
 EOF
 
-if [ "$KEEP_ACCOUNTS" -eq 0 ]; then
+if [ "$KEEP_ACCOUNTS" -eq 0 ] && [ "$CLEAR_CONNECTIONS" -eq 0 ]; then
   cat <<EOF
   Create accounts again (the management API is loopback-only):
 
