@@ -547,6 +547,20 @@ func (s *FeedbagService) DeleteItem(ctx context.Context, instance *state.Session
 			// until they reconnect. Scoped strictly to AIM↔AIM (both UIN == 0),
 			// exactly like the UpsertItem gate — ICQ relationships are untouched.
 			if instance.UIN() == 0 && buddy.UIN() == 0 {
+				// A group move is a delete of the old row plus an insert of a new
+				// one under the target group (the client sends the insert first).
+				// If a buddy row for this person still exists after the delete, it
+				// was a move, not a removal — leave the grant and the connection
+				// intact. Without this, changing someone's group would silently
+				// sever the connection and force re-authorization.
+				moved, merr := s.buddyStillListed(ctx, instance.IdentScreenName(), buddy)
+				if merr != nil {
+					return nil, fmt.Errorf("buddyStillListed: %w", merr)
+				}
+				if moved {
+					continue
+				}
+
 				// Were they actually connected before this removal? A grant from
 				// the buddy to us means yes. Checked BEFORE revoking, and it is
 				// what makes the removal notice loop-safe: when the buddy's client
@@ -585,6 +599,23 @@ func (s *FeedbagService) DeleteItem(ctx context.Context, instance *state.Session
 	}
 
 	return nil, nil
+}
+
+// buddyStillListed reports whether owner still has any buddy-class feedbag row
+// naming buddy. It distinguishes a group move (delete the old row, insert one
+// under the new group) from a real removal: after the delete, a move still has a
+// row for the buddy, a removal does not.
+func (s *FeedbagService) buddyStillListed(ctx context.Context, owner, buddy state.IdentScreenName) (bool, error) {
+	items, err := s.feedbagManager.Feedbag(ctx, owner)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if it.ClassID == wire.FeedbagClassIdBuddy && state.NewIdentScreenName(it.Name) == buddy {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // StartCluster signals the beginning of a batch of feedbag operations that clients should

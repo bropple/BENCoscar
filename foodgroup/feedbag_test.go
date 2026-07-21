@@ -3311,6 +3311,14 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 					FeedbagDelete(matchContext(), params.screenName, params.items).
 					Return(nil)
 			}
+			// AIM buddy removal reads the feedbag back to tell a move from a
+			// removal (buddyStillListed). These cases are all removals, so the
+			// buddy is gone: an empty read means "not a move". Optional, since
+			// non-AIM-buddy deletes never reach that check.
+			feedbagManager.EXPECT().
+				Feedbag(matchContext(), mock.Anything).
+				Return(nil, nil).
+				Maybe()
 			buddyUpdateBroadcast := newMockbuddyBroadcaster(t)
 			for _, params := range tc.mockParams.broadcastVisibilityParams {
 				buddyUpdateBroadcast.EXPECT().
@@ -5245,6 +5253,10 @@ func TestFeedbagService_notifyTxnCluster(t *testing.T) {
 		feedbagManager.EXPECT().
 			FeedbagDelete(matchContext(), me, deleteBody.Items).
 			Return(nil)
+		// buddyStillListed reads the feedbag back; empty means a real removal.
+		feedbagManager.EXPECT().
+			Feedbag(matchContext(), me).
+			Return(nil, nil)
 
 		buddyBroadcaster := newMockbuddyBroadcaster(t)
 		buddyBroadcaster.EXPECT().
