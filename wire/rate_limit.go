@@ -67,13 +67,27 @@ func DefaultRateLimitClasses() RateLimitClasses {
 				MaxLevel:        6000,
 			},
 			{
+				// BENCO: retuned for humans. This class carries ICBM sends and profile
+				// lookups, and the upstream numbers are 1990s server-protection tuning.
+				// The moving average converges to your send gap, so LimitLevel 4000
+				// meant ONE MESSAGE EVERY FOUR SECONDS sustained, with only ~8 quick
+				// messages of burst (6000 decaying 5%/send) before the server started
+				// refusing. Ordinary conversation tripped it.
+				//
+				// The model is fine — the parameters were wrong. LimitLevel IS the
+				// sustained rate, and the headroom up to MaxLevel IS the burst
+				// allowance: token-bucket behaviour expressed in OSCAR's own terms,
+				// with no wire deviation. Now ~1 message/sec sustained and ~50 in a
+				// burst (15000 × 0.95ⁿ < 1000 → n ≈ 53), recovering quickly once
+				// limited. DisconnectLevel is the genuine-abuse floor — a sustained
+				// 10/sec is a script, not a person.
 				ID:              3,
 				WindowSize:      20,
-				ClearLevel:      5100,
-				AlertLevel:      5000,
-				LimitLevel:      4000,
-				DisconnectLevel: 3000,
-				MaxLevel:        6000,
+				ClearLevel:      1500,
+				AlertLevel:      1200,
+				LimitLevel:      1000,
+				DisconnectLevel: 100,
+				MaxLevel:        15000,
 			},
 			{
 				ID:              4,

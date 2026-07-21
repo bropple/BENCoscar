@@ -549,6 +549,22 @@ func (s oscarServer) processBUCPAuth(ctx context.Context, flapc *wire.FlapClient
 	}
 }
 
+// sendRateLimitErr answers a SNAC that exceeded its rate class with OSCAR's own
+// "rate exceeded" error, on the same foodgroup (subgroup 0x01 is the error
+// subgroup for every foodgroup) and correlated by request ID so the client can
+// tie it back to the exact request it refused.
+func sendRateLimitErr(frameIn wire.SNACFrame, rw ResponseWriter) error {
+	frameOut := wire.SNACFrame{
+		FoodGroup: frameIn.FoodGroup,
+		SubGroup:  0x01, // error subgroup for all SNACs
+		RequestID: frameIn.RequestID,
+	}
+	bodyOut := wire.SNACError{
+		Code: wire.ErrorCodeRateToHost,
+	}
+	return rw.SendSNAC(frameOut, bodyOut)
+}
+
 func sendInvalidSNACErr(frameIn wire.SNACFrame, rw ResponseWriter) error {
 	frameOut := wire.SNACFrame{
 		FoodGroup: frameIn.FoodGroup,
@@ -616,9 +632,18 @@ func (s oscarServer) dispatchIncomingMessages(
 				rateClassID, ok := s.rateLimits.RateClassLookup(inFrame.FoodGroup, inFrame.SubGroup)
 				if ok {
 					if status := instance.Session().EvaluateRateLimit(time.Now(), rateClassID); status == wire.RateLimitStatusLimited {
-						s.logger.DebugContext(ctx, "rate limit exceeded, dropping SNAC",
+						s.logger.DebugContext(ctx, "rate limit exceeded, rejecting SNAC",
 							"foodgroup", wire.FoodGroupName(inFrame.FoodGroup),
 							"subgroup", wire.SubGroupName(inFrame.FoodGroup, inFrame.SubGroup))
+						// BENCO: upstream silently DROPPED the SNAC here. In a chat
+						// client that means a message vanishes with neither an error nor
+						// an acknowledgement, so the sender's UI shows it as delivered —
+						// messages lost in silence. Answer with the protocol's own rate
+						// error instead, so the client can say what happened and mark
+						// the message unsent.
+						if err := sendRateLimitErr(inFrame, flapc); err != nil {
+							return err
+						}
 						break
 					}
 				} else {

@@ -2939,6 +2939,12 @@ func TestOServiceService_RateLimitUpdates(t *testing.T) {
 	t.Run("(win aim 1.x) transition state from clear > alert > limited > clear, then change rate limit param", func(t *testing.T) {
 		now := time.Now()
 		instance := newTestInstance("me")
+		// Applied twice on purpose: the first call leaves the PREVIOUSLY observed
+		// states derived from the server defaults (whatever a new session was
+		// seeded with), which would make these transition assertions depend on
+		// those defaults rather than on this fixture. The second call settles both
+		// current and last-observed onto the fixture.
+		instance.Session().SetRateClasses(now, wire.NewRateLimitClasses(rateClasses))
 		instance.Session().SetRateClasses(now, wire.NewRateLimitClasses(rateClasses))
 
 		classId := wire.RateLimitClassID(3)
@@ -3075,6 +3081,12 @@ func TestOServiceService_RateLimitUpdates(t *testing.T) {
 	t.Run("(win aim > 1.x) transition state from clear > alert > limited > clear", func(t *testing.T) {
 		now := time.Now()
 		instance := newTestInstance("me")
+		// Applied twice on purpose: the first call leaves the PREVIOUSLY observed
+		// states derived from the server defaults (whatever a new session was
+		// seeded with), which would make these transition assertions depend on
+		// those defaults rather than on this fixture. The second call settles both
+		// current and last-observed onto the fixture.
+		instance.Session().SetRateClasses(now, wire.NewRateLimitClasses(rateClasses))
 		instance.Session().SetRateClasses(now, wire.NewRateLimitClasses(rateClasses))
 
 		var versions [wire.MDir + 1]uint16
