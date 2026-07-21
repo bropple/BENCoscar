@@ -1,0 +1,60 @@
+# BENCO scheduled vulnerability scan.
+#
+# A SEPARATE workflow from anything upstream ships, for the reason benco.yml
+# gives: new files rebase almost free, edits to upstream's go.yml conflict
+# forever. Upstream's workflows key off `main` and never fire on `benco` anyway.
+#
+# Why this exists alongside Dependabot: Dependabot reports that a newer version
+# is available; govulncheck reports whether a vulnerable SYMBOL is actually
+# reachable from this code. The 2026-07-21 audit is the case in point — five
+# advisories against golang.org/x/net/html were present at package level and not
+# one of them reachable. A version-comparing scanner would have produced noise;
+# govulncheck produced an answer.
+#
+# The schedule is the real payload. The failure worth catching is a disclosure
+# landing against code that has not changed in months, which no push- or
+# PR-triggered job would ever see.
+
+name: BENCO Security
+
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  pull_request:
+    branches: ["benco"]
+    paths:
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/benco-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # Tracks the toolchain in go.mod rather than pinning separately, same
+          # as benco.yml, so an upstream Go bump does not need an edit here too.
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      # Fails only on a reachable vulnerability. Module-level advisories in
+      # packages this server never imports are listed but do not fail the job —
+      # this tree carries a number of those (unused golang-migrate drivers among
+      # them), and failing on them would make the signal worthless.
+      #
+      # No build prerequisites here, unlike the client: this is a plain Go server
+      # with no embedded frontend and no cgo GUI toolkit to install.
+      - name: Run govulncheck
+        run: govulncheck ./...

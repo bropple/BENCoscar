@@ -1,0 +1,57 @@
+# Dependency update automation.
+#
+# A NEW file, not an edit to anything upstream ships — the fork discipline in
+# CLAUDE.md, same reasoning as benco.yml: new files rebase almost free, edits to
+# upstream files conflict forever. Upstream has no dependabot.yml, so nothing
+# here collides.
+#
+# target-branch matters for this repo. It is a fork of mk6i/open-oscar-server,
+# whose branch is `main`; ours is `benco`, and every workflow here keys off that.
+# Naming it explicitly means a Dependabot PR can never be opened against a
+# branch nobody develops on.
+#
+# NOTE: Dependabot is disabled by default on FORKED repositories. This file is
+# necessary but not sufficient — it also has to be enabled once in the repo's
+# settings (Settings -> Code security -> Dependabot). Same for scheduled Actions
+# runs, which GitHub also disables in forks until Actions is enabled, and which
+# it switches off again after 60 days of repository inactivity. Worth knowing on
+# a repo that goes quiet between bursts of work.
+
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    target-branch: benco
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      go-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    ignore:
+      # goAMF3 is only reachable from server/webapi/, which the benco branch
+      # removed outright — upstream v0.24.0's WebAPI has an authentication
+      # bypass (AuthenticateUser accepts any non-empty password) and this fork
+      # makes ENABLE_WEBAPI a hard startup failure. The module lingers in go.mod
+      # as dead weight; bumping it changes nothing that runs. Drop this ignore
+      # if the webapi tree is ever pruned or restored.
+      - dependency-name: github.com/breign/goAMF3
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: benco
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
