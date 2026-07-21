@@ -49,3 +49,31 @@ func (s *FeedbagService) sendAIMAuthReq(ctx context.Context, from *state.Session
 		},
 	})
 }
+
+// sendAIMConnectionRemoved tells a removed buddy that `from` has disconnected
+// from them, so their client can drop `from` silently. OSCAR has no native
+// "you were removed" push, so it rides the authorization-response channel as a
+// revocation: SNAC(0x13,0x1B) FeedbagRespondAuthorizeToClient with Accepted=0.
+// A BENCchat client already removes the named buddy on a 0x1B decline, so a
+// removal and a declined request converge on the same handling. Offline is a
+// no-op; the relationship is already severed server-side, and the stale row on
+// the buddy's list surfaces the next time they try to reach `from` (the gate
+// rejects it).
+func (s *FeedbagService) sendAIMConnectionRemoved(ctx context.Context, from, target state.IdentScreenName) {
+	s.messageRelayer.RelayToScreenName(ctx, target, wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Feedbag,
+			SubGroup:  wire.FeedbagRespondAuthorizeToClient,
+			Flags:     wire.SNACFlagsExtendedInfo,
+		},
+		Body: wire.SNAC_0x13_0x1B_FeedbagRespondAuthorizeToClient{
+			TLVLBlock: wire.TLVLBlock{
+				TLVList: wire.TLVList{
+					wire.NewTLVBE(wire.FeedbagTLVVersion, uint16(2)),
+				},
+			},
+			ScreenName: from.String(),
+			Accepted:   0,
+		},
+	})
+}

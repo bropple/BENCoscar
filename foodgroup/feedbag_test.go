@@ -2792,6 +2792,13 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 					},
 				},
 				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					// AIM↔AIM removal first checks whether the pair was connected
+					// (a buddy→deleter grant existed). buddy1 was connected
+					// (RequiresAuthorization=false), buddy2 was not (=true).
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("buddy1"), requester: state.NewIdentScreenName("me"), result: false},
+						{owner: state.NewIdentScreenName("buddy2"), requester: state.NewIdentScreenName("me"), result: true},
+					},
 					// AIM↔AIM removal revokes pre-auth in both directions per buddy.
 					revokePreAuthParams: revokePreAuthParams{
 						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy1")},
@@ -2812,6 +2819,25 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
+					// Only the connected buddy (buddy1) receives the 0x1B removal
+					// notice naming the deleter, with Accepted=0. buddy2 was not
+					// connected, so its absence here asserts NO relay to buddy2.
+					relayToScreenNameParams: relayToScreenNameParams{
+						{
+							screenName: state.NewIdentScreenName("buddy1"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagRespondAuthorizeToClient,
+									Flags:     wire.SNACFlagsExtendedInfo,
+								},
+								Body: func(val any) bool {
+									b, ok := val.(wire.SNAC_0x13_0x1B_FeedbagRespondAuthorizeToClient)
+									return ok && b.ScreenName == "me" && b.Accepted == 0
+								},
+							},
+						},
+					},
 					relayToOtherInstancesParams: relayToOtherInstancesParams{
 						{
 							screenName: state.NewIdentScreenName("me"),
@@ -2890,6 +2916,11 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 					},
 				},
 				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					// Not connected (RequiresAuthorization=true), so no removal
+					// notice is relayed; the case stays focused on txn deferral.
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("buddy1"), requester: state.NewIdentScreenName("me"), result: true},
+					},
 					revokePreAuthParams: revokePreAuthParams{
 						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy1")},
 						{owner: state.NewIdentScreenName("buddy1"), authorized: state.NewIdentScreenName("me")},
@@ -3082,6 +3113,194 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 			},
 			expectOutput: nil,
 		},
+		{
+			// BENCO: removing a connected AIM buddy (a buddy→deleter grant
+			// existed, so RequiresAuthorization returns false) relays the
+			// SNAC(0x13,0x1B) FeedbagRespondAuthorizeToClient removal notice to
+			// that buddy, naming the deleter with Accepted=0, so their client
+			// can drop the deleter silently.
+			name:     "remove connected AIM buddy sends 0x1B removal notice",
+			instance: newTestInstance("me"),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagDeleteItem,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+					Items: []wire.FeedbagItem{
+						{ClassID: wire.FeedbagClassIdBuddy, Name: "buddy1"},
+					},
+				},
+			},
+			mockParams: mockParams{
+				feedbagManagerParams: feedbagManagerParams{
+					feedbagDeleteParams: feedbagDeleteParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							items: []wire.FeedbagItem{
+								{ClassID: wire.FeedbagClassIdBuddy, Name: "buddy1"},
+							},
+						},
+					},
+				},
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("buddy1"), requester: state.NewIdentScreenName("me"), result: false},
+					},
+					revokePreAuthParams: revokePreAuthParams{
+						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy1")},
+						{owner: state.NewIdentScreenName("buddy1"), authorized: state.NewIdentScreenName("me")},
+					},
+				},
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastVisibilityParams: broadcastVisibilityParams{
+						{
+							from:   state.NewIdentScreenName("me"),
+							filter: []state.IdentScreenName{state.NewIdentScreenName("buddy1")},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToScreenNameParams: relayToScreenNameParams{
+						{
+							screenName: state.NewIdentScreenName("buddy1"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagRespondAuthorizeToClient,
+									Flags:     wire.SNACFlagsExtendedInfo,
+								},
+								// matcher: removal notice names the deleter and is a
+								// decline (Accepted=0)
+								Body: func(val any) bool {
+									b, ok := val.(wire.SNAC_0x13_0x1B_FeedbagRespondAuthorizeToClient)
+									return ok && b.ScreenName == "me" && b.Accepted == 0
+								},
+							},
+						},
+					},
+					relayToOtherInstancesParams: relayToOtherInstancesParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagDeleteItem,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+									Items: []wire.FeedbagItem{
+										{ClassID: wire.FeedbagClassIdBuddy, Name: "buddy1"},
+									},
+								},
+							},
+						},
+					},
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagStatus,
+									RequestID: 1234,
+								},
+								Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+									Results: []uint16{0x0000},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
+		},
+		{
+			// Loop-safety: removing an AIM buddy who is NOT connected
+			// (RequiresAuthorization returns true, no buddy→deleter grant)
+			// still revokes pre-auth but sends NO removal notice. An empty
+			// relayToScreenNameParams asserts RelayToScreenName is never called,
+			// which is what stops the buddy's echoed removal from notifying back.
+			name:     "remove not-connected AIM buddy sends no notice",
+			instance: newTestInstance("me"),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagDeleteItem,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+					Items: []wire.FeedbagItem{
+						{ClassID: wire.FeedbagClassIdBuddy, Name: "buddy1"},
+					},
+				},
+			},
+			mockParams: mockParams{
+				feedbagManagerParams: feedbagManagerParams{
+					feedbagDeleteParams: feedbagDeleteParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							items: []wire.FeedbagItem{
+								{ClassID: wire.FeedbagClassIdBuddy, Name: "buddy1"},
+							},
+						},
+					},
+				},
+				contactPreAuthorizerParams: contactPreAuthorizerParams{
+					requiresAuthorizationParams: requiresAuthorizationParams{
+						{owner: state.NewIdentScreenName("buddy1"), requester: state.NewIdentScreenName("me"), result: true},
+					},
+					revokePreAuthParams: revokePreAuthParams{
+						{owner: state.NewIdentScreenName("me"), authorized: state.NewIdentScreenName("buddy1")},
+						{owner: state.NewIdentScreenName("buddy1"), authorized: state.NewIdentScreenName("me")},
+					},
+				},
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastVisibilityParams: broadcastVisibilityParams{
+						{
+							from:   state.NewIdentScreenName("me"),
+							filter: []state.IdentScreenName{state.NewIdentScreenName("buddy1")},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToOtherInstancesParams: relayToOtherInstancesParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagDeleteItem,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x0A_FeedbagDeleteItem{
+									Items: []wire.FeedbagItem{
+										{ClassID: wire.FeedbagClassIdBuddy, Name: "buddy1"},
+									},
+								},
+							},
+						},
+					},
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("me"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagStatus,
+									RequestID: 1234,
+								},
+								Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+									Results: []uint16{0x0000},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
+		},
 	}
 
 	for _, tc := range cases {
@@ -3107,7 +3326,22 @@ func TestFeedbagService_DeleteItem(t *testing.T) {
 				messageRelayer.EXPECT().
 					RelayToSelf(mock.Anything, mock.Anything, params.message)
 			}
+			for _, params := range tc.mockParams.relayToScreenNameParams {
+				if matcherFn, ok := params.message.Body.(func(val any) bool); ok {
+					messageRelayer.EXPECT().
+						RelayToScreenName(matchContext(), params.screenName, mock.MatchedBy(func(message wire.SNACMessage) bool {
+							return params.message.Frame == message.Frame &&
+								matcherFn(message.Body)
+						}))
+				} else {
+					messageRelayer.EXPECT().
+						RelayToScreenName(matchContext(), params.screenName, params.message)
+				}
+			}
 			contactPreAuth := newMockContactPreAuthorizer(t)
+			for _, params := range tc.mockParams.requiresAuthorizationParams {
+				contactPreAuth.EXPECT().RequiresAuthorization(matchContext(), params.owner, params.requester).Return(params.result, params.err)
+			}
 			for _, params := range tc.mockParams.revokePreAuthParams {
 				contactPreAuth.EXPECT().RevokePreAuth(matchContext(), params.owner, params.authorized).Return(params.err)
 			}
@@ -5018,8 +5252,11 @@ func TestFeedbagService_notifyTxnCluster(t *testing.T) {
 			Return(nil).
 			Once()
 
-		// AIM↔AIM removal revokes pre-auth in both directions.
+		// AIM↔AIM removal first checks whether the pair was connected, then
+		// revokes pre-auth in both directions. Not connected here
+		// (RequiresAuthorization=true), so no removal notice is relayed.
 		contactPreAuth := newMockContactPreAuthorizer(t)
+		contactPreAuth.EXPECT().RequiresAuthorization(matchContext(), buddy1, me).Return(true, nil).Once()
 		contactPreAuth.EXPECT().RevokePreAuth(matchContext(), me, buddy1).Return(nil).Once()
 		contactPreAuth.EXPECT().RevokePreAuth(matchContext(), buddy1, me).Return(nil).Once()
 

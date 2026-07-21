@@ -547,11 +547,28 @@ func (s *FeedbagService) DeleteItem(ctx context.Context, instance *state.Session
 			// until they reconnect. Scoped strictly to AIM↔AIM (both UIN == 0),
 			// exactly like the UpsertItem gate — ICQ relationships are untouched.
 			if instance.UIN() == 0 && buddy.UIN() == 0 {
+				// Were they actually connected before this removal? A grant from
+				// the buddy to us means yes. Checked BEFORE revoking, and it is
+				// what makes the removal notice loop-safe: when the buddy's client
+				// echoes the removal (drops us in turn), the grants are already
+				// gone, so its own check returns "not connected" and it does not
+				// notify us back. One-shot, terminates.
+				stillAuthd, cerr := s.contactPreAuthorizer.RequiresAuthorization(ctx, buddy, instance.IdentScreenName())
+				wasConnected := cerr == nil && !stillAuthd
+
 				if err := s.contactPreAuthorizer.RevokePreAuth(ctx, instance.IdentScreenName(), buddy); err != nil {
 					return nil, fmt.Errorf("contactPreAuthorizer.RevokePreAuth: %w", err)
 				}
 				if err := s.contactPreAuthorizer.RevokePreAuth(ctx, buddy, instance.IdentScreenName()); err != nil {
 					return nil, fmt.Errorf("reciprocal RevokePreAuth: %w", err)
+				}
+
+				// Tell the removed buddy so their client can drop us silently.
+				// OSCAR has no native "you were removed" push, so it rides the
+				// authorization-response channel as a revocation (Accepted=0).
+				// Only when they were connected, per the loop-safety above.
+				if wasConnected {
+					s.sendAIMConnectionRemoved(ctx, instance.IdentScreenName(), buddy)
 				}
 			}
 		}
