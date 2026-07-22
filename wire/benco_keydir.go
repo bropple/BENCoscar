@@ -219,9 +219,31 @@ type SNAC_0xBE00_0x0002_BENCOKeyDirPublishRequest struct {
 // detectable: a client whose publish was rejected as stale learns the value it
 // needs to beat rather than having to re-query to find out.
 type SNAC_0xBE00_0x0003_BENCOKeyDirPublishReply struct {
-	Accepted uint8 // 1 = stored
+	// Accepted says what happened, and it is three-valued rather than a boolean
+	// because the two ways of failing call for opposite responses from a client.
+	// A stale counter is a race with your own other device: re-read, re-sign,
+	// try again. A pinned identity is not retryable by any client at all — it
+	// needs an administrator — and a client that retries it just spins.
+	//
+	// Unknown values read as "not accepted", so a client that has not learned a
+	// new code degrades to refusing rather than to accepting.
+	Accepted uint8
 	Counter  uint64
 }
+
+// Outcomes for SNAC_0xBE00_0x0003_BENCOKeyDirPublishReply.Accepted.
+const (
+	// BENCOPublishRejected is a stale or out-of-range counter. Retryable: read
+	// the counter in the reply, sign a manifest past it, publish again.
+	BENCOPublishRejected uint8 = 0
+	// BENCOPublishStored means the manifest is now the account's.
+	BENCOPublishStored uint8 = 1
+	// BENCOPublishIdentityPinned means the account is bound to a different
+	// identity key. NOT retryable: an administrator must clear the account's key
+	// directory before any new identity can be published, which is destructive
+	// by design. See state.ClearKeyDirectory.
+	BENCOPublishIdentityPinned uint8 = 2
+)
 
 // SNAC_0xBE00_0x0004_BENCOKeyDirQueryRequest asks for an account's manifest.
 //

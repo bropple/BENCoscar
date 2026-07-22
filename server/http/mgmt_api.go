@@ -24,7 +24,7 @@ import (
 	"github.com/mk6i/open-oscar-server/wire"
 )
 
-func NewManagementAPI(bld config.Build, apiCfg config.APIConfig, userManager UserManager, sessionRetriever SessionRetriever, buddyBroadcaster BuddyBroadcaster, chatRoomRetriever ChatRoomRetriever, chatRoomCreator ChatRoomCreator, chatRoomDeleter ChatRoomDeleter, chatSessionRetriever ChatSessionRetriever, directoryManager DirectoryManager, messageRelayer MessageRelayer, bartAssetManager BARTAssetManager, feedbagRetriever FeedBagRetriever, feedbagManager FeedbagManager, accountManager AccountManager, profileRetriever ProfileRetriever, webAPIKeyManager WebAPIKeyManager, icqProfileManager ICQProfileManager, createAccount state.CreateAccountFunc, logger *slog.Logger) *Server {
+func NewManagementAPI(bld config.Build, apiCfg config.APIConfig, userManager UserManager, sessionRetriever SessionRetriever, buddyBroadcaster BuddyBroadcaster, chatRoomRetriever ChatRoomRetriever, chatRoomCreator ChatRoomCreator, chatRoomDeleter ChatRoomDeleter, chatSessionRetriever ChatSessionRetriever, directoryManager DirectoryManager, messageRelayer MessageRelayer, bartAssetManager BARTAssetManager, feedbagRetriever FeedBagRetriever, feedbagManager FeedbagManager, accountManager AccountManager, profileRetriever ProfileRetriever, webAPIKeyManager WebAPIKeyManager, icqProfileManager ICQProfileManager, keyDirectoryAdmin KeyDirectoryAdmin, createAccount state.CreateAccountFunc, logger *slog.Logger) *Server {
 	mux := http.NewServeMux()
 
 	// Handlers for '/user' route
@@ -36,6 +36,11 @@ func NewManagementAPI(bld config.Build, apiCfg config.APIConfig, userManager Use
 	})
 	mux.HandleFunc("POST /user", func(w http.ResponseWriter, r *http.Request) {
 		postUserHandler(w, r, createAccount, logger)
+	})
+
+	// Handlers for '/user/{screenname}/keydir' route
+	mux.HandleFunc("DELETE /user/{screenname}/keydir", func(w http.ResponseWriter, r *http.Request) {
+		deleteUserKeyDirHandler(w, r, keyDirectoryAdmin, userManager, logger)
 	})
 
 	// Handlers for '/user/password' route
@@ -255,6 +260,56 @@ func deleteUserHandler(w http.ResponseWriter, r *http.Request, manager UserManag
 	}
 
 	// BENCO: no body — HTTP discards anything written after a 204.
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteUserKeyDirHandler handles DELETE /user/{screenname}/keydir.
+//
+// It releases an account's pinned identity so a new one can be bootstrapped, and
+// it is the ONLY way past that pin — PublishManifest refuses a manifest under a
+// different identity key, which is what stops somebody holding the password from
+// taking an account over quietly.
+//
+// Destructive on purpose. The account survives; its cryptographic identity does
+// not, every contact's safety number moves when a new one is bootstrapped, and
+// nothing here restores anything. That asymmetry is the design: an operator who
+// can restore an identity is an operator who can take one over. The superseded
+// backup is archived to a table no client can reach, so a clear made on a story
+// that turns out to be false is recoverable by hand — but only by somebody with
+// database access, and only deliberately.
+//
+// Reachable exactly as far as the rest of this API is, which is a loopback-bound
+// socket on the VPS. That is the access control.
+func deleteUserKeyDirHandler(w http.ResponseWriter, r *http.Request, admin KeyDirectoryAdmin, userManager UserManager, logger *slog.Logger) {
+	sn := state.NewIdentScreenName(r.PathValue("screenname"))
+
+	// Checked first so clearing a typo'd name is a 404 rather than a silent
+	// success against nothing.
+	u, err := userManager.User(r.Context(), sn)
+	if err != nil {
+		logger.Error("error looking up user DELETE /user/{screenname}/keydir", "err", err.Error())
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if u == nil {
+		http.Error(w, "user does not exist", http.StatusNotFound)
+		return
+	}
+
+	cleared, err := admin.ClearKeyDirectory(r.Context(), sn)
+	if err != nil {
+		logger.Error("error clearing key directory DELETE /user/{screenname}/keydir", "err", err.Error())
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Logged at INFO whether or not anything was there. This is the operation
+	// that lets an account's identity be replaced, so the fact it ran is the
+	// single most useful line in the log when working out what happened later.
+	logger.Info("cleared an account's key directory",
+		"screen_name", sn.String(), "had_entries", cleared,
+		"note", "the account can now bootstrap a new identity; every contact's safety number will move")
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

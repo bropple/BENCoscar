@@ -168,28 +168,112 @@ func TestKeyDirectory_StaleCounterIsRejected(t *testing.T) {
 // change is the account holder recovering or an attacker with the password
 // installing their own — those two are cryptographically indistinguishable by
 // construction, and adjudicating it is the client's job.
-func TestKeyDirectory_IdentityChangeResetsTheCounter(t *testing.T) {
+// TestKeyDirectory_IdentityIsPinned is the K5 residual.
+//
+// Accepting a manifest under a new identity made a password the whole account
+// again: sign in, publish a fresh identity, and the takeover is complete without
+// anyone's approval. The server still cannot judge WHICH identity is legitimate —
+// it never could — so it stops trying to and refuses the change instead, moving
+// the decision to an administrator with a destructive operation.
+func TestKeyDirectory_IdentityIsPinned(t *testing.T) {
 	ctx := context.Background()
 	f, sns := newKeyDirStore(t, "someuser")
 
-	_, err := f.PublishManifest(ctx, sns[0], manifest(1, 99, "old identity"))
+	_, err := f.PublishManifest(ctx, sns[0], manifest(1, 99, "the account's identity"))
 	require.NoError(t, err)
 
-	// Counter 1 under a DIFFERENT identity: accepted, despite being far below
-	// the stored 99.
-	counter, err := f.PublishManifest(ctx, sns[0], manifest(2, 1, "new identity"))
+	// A different identity, at any counter — high or low. Neither gets in.
+	for _, counter := range []uint64{1, 100, 1000} {
+		_, err := f.PublishManifest(ctx, sns[0], manifest(2, counter, "an attacker's identity"))
+		require.ErrorIs(t, err, ErrIdentityPinned, "counter %d", counter)
+	}
+
+	// And the stored manifest is untouched, which is the part that matters:
+	// a refused publish must not have moved the counter or the identity.
+	got, err := f.KeyManifest(ctx, sns[0])
+	require.NoError(t, err)
+	assert.Equal(t, identKey(1), got.IdentityKey)
+	assert.Equal(t, uint64(99), got.Counter)
+}
+
+// TestKeyDirectory_ClearingReleasesThePin: somebody who lost every device AND
+// their recovery phrase is otherwise stuck forever, so there has to be a way
+// out. It is deliberately destructive and deliberately the only one.
+func TestKeyDirectory_ClearingReleasesThePin(t *testing.T) {
+	ctx := context.Background()
+	f, sns := newKeyDirStore(t, "someuser")
+
+	_, err := f.PublishManifest(ctx, sns[0], manifest(1, 99, "the old identity"))
+	require.NoError(t, err)
+	require.NoError(t, f.SetIdentityBackup(ctx, sns[0], IdentityBackup{
+		KDF: 1, Params: []byte("p"), Salt: []byte("s"), Blob: []byte("the old identity, wrapped"),
+	}))
+
+	cleared, err := f.ClearKeyDirectory(ctx, sns[0])
+	require.NoError(t, err)
+	assert.True(t, cleared)
+
+	// Nothing left to be pinned to.
+	got, err := f.KeyManifest(ctx, sns[0])
+	require.NoError(t, err)
+	assert.Nil(t, got)
+	backup, err := f.IdentityBackup(ctx, sns[0])
+	require.NoError(t, err)
+	assert.Nil(t, backup)
+
+	// A new identity now publishes at any counter, exactly as a fresh account
+	// would — which is the point: clearing returns the account to the state
+	// provisioning leaves it in, rather than opening a second path.
+	counter, err := f.PublishManifest(ctx, sns[0], manifest(2, 1, "a new identity"))
 	require.NoError(t, err)
 	assert.Equal(t, uint64(1), counter)
 
-	got, err := f.KeyManifest(ctx, sns[0])
+	// The destroyed backup is archived, not gone. Clearing is an operator acting
+	// on a story they were told, and stories turn out to be wrong.
+	history, err := f.IdentityBackupHistory(ctx, sns[0])
 	require.NoError(t, err)
-	assert.Equal(t, identKey(2), got.IdentityKey)
-	assert.Equal(t, uint64(1), got.Counter)
+	require.Len(t, history, 1)
+	assert.Equal(t, []byte("the old identity, wrapped"), history[0].Blob)
+}
 
-	// And the new identity's counter is monotonic from there — the reset applies
-	// to the change itself, not to everything that follows it.
-	_, err = f.PublishManifest(ctx, sns[0], manifest(2, 1, "replay under new identity"))
-	require.ErrorIs(t, err, ErrStaleCounter)
+// TestKeyDirectory_ClearingIsIdempotentAndHonest: an operator clearing an
+// account that has nothing to clear must not be told something happened.
+func TestKeyDirectory_ClearingIsIdempotentAndHonest(t *testing.T) {
+	ctx := context.Background()
+	f, sns := newKeyDirStore(t, "someuser")
+
+	cleared, err := f.ClearKeyDirectory(ctx, sns[0])
+	require.NoError(t, err)
+	assert.False(t, cleared, "clearing an empty directory reported that it did something")
+
+	_, err = f.PublishManifest(ctx, sns[0], manifest(1, 5, "an identity"))
+	require.NoError(t, err)
+	cleared, err = f.ClearKeyDirectory(ctx, sns[0])
+	require.NoError(t, err)
+	assert.True(t, cleared)
+	cleared, err = f.ClearKeyDirectory(ctx, sns[0])
+	require.NoError(t, err)
+	assert.False(t, cleared)
+}
+
+// TestKeyDirectory_ClearingIsPerAccount: the operation destroys an identity, so
+// reaching past the account named would be the worst possible blast radius.
+func TestKeyDirectory_ClearingIsPerAccount(t *testing.T) {
+	ctx := context.Background()
+	f, sns := newKeyDirStore(t, "alice", "bob")
+
+	_, err := f.PublishManifest(ctx, sns[0], manifest(1, 5, "alice's identity"))
+	require.NoError(t, err)
+	_, err = f.PublishManifest(ctx, sns[1], manifest(2, 7, "bob's identity"))
+	require.NoError(t, err)
+
+	_, err = f.ClearKeyDirectory(ctx, sns[0])
+	require.NoError(t, err)
+
+	got, err := f.KeyManifest(ctx, sns[1])
+	require.NoError(t, err)
+	require.NotNil(t, got, "clearing one account's directory took another's with it")
+	assert.Equal(t, uint64(7), got.Counter)
 }
 
 // Same key bytes but a different algorithm identifier is a different identity.
@@ -204,9 +288,8 @@ func TestKeyDirectory_IdentityComparisonIncludesTheAlgorithm(t *testing.T) {
 
 	other := manifest(1, 1, "some other scheme")
 	other.IdentityAlg = 0x04
-	counter, err := f.PublishManifest(ctx, sns[0], other)
-	require.NoError(t, err)
-	assert.Equal(t, uint64(1), counter)
+	_, err = f.PublishManifest(ctx, sns[0], other)
+	require.ErrorIs(t, err, ErrIdentityPinned)
 }
 
 // SQLite's INTEGER is signed, so a uint64 above the signed maximum would wrap to
@@ -350,6 +433,11 @@ func TestKeyDirectory_CascadesOnUserDelete(t *testing.T) {
 func TestKeyDirectory_SentinelErrorsAreDistinct(t *testing.T) {
 	assert.False(t, errors.Is(ErrStaleCounter, ErrCounterOutOfRange))
 	assert.False(t, errors.Is(ErrCounterOutOfRange, ErrStaleCounter))
+	// A pinned identity is not retryable and a stale counter is. Conflating them
+	// would make a client spin against a check that has nothing to do with
+	// counters, saying nothing to the user while it did.
+	assert.False(t, errors.Is(ErrIdentityPinned, ErrStaleCounter))
+	assert.False(t, errors.Is(ErrStaleCounter, ErrIdentityPinned))
 }
 
 // TestKeyDirectory_ReplacedBackupIsArchived: replacing a backup destroys the

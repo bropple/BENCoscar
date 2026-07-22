@@ -110,6 +110,27 @@ func (s BENCOKeyDirService) PublishManifest(
 
 	counter, err := s.keyDirManager.PublishManifest(ctx, screenName, stored)
 	if err != nil {
+		if errors.Is(err, state.ErrIdentityPinned) {
+			// Worth a WARNING rather than a debug line, and worth the operator's
+			// attention: the routine cause is somebody who lost every device
+			// bootstrapping again, and the other cause is somebody with the
+			// password trying to take the account over. Both need a human, and
+			// only the logs will say it happened.
+			s.logger.WarnContext(ctx, "refusing a manifest under a different identity",
+				"screen_name", screenName,
+				"note", "clear the account's key directory to allow a new identity")
+			return wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.BENCOKeyDir,
+					SubGroup:  wire.BENCOKeyDirPublishReply,
+					RequestID: inFrame.RequestID,
+				},
+				Body: wire.SNAC_0xBE00_0x0003_BENCOKeyDirPublishReply{
+					Accepted: wire.BENCOPublishIdentityPinned,
+					Counter:  counter,
+				},
+			}, nil
+		}
 		if errors.Is(err, state.ErrStaleCounter) || errors.Is(err, state.ErrCounterOutOfRange) {
 			// Not a server fault, and the reply still carries the counter the
 			// server holds so a client that lost a race learns what to beat
@@ -123,7 +144,7 @@ func (s BENCOKeyDirService) PublishManifest(
 					RequestID: inFrame.RequestID,
 				},
 				Body: wire.SNAC_0xBE00_0x0003_BENCOKeyDirPublishReply{
-					Accepted: 0,
+					Accepted: wire.BENCOPublishRejected,
 					Counter:  counter,
 				},
 			}, nil
@@ -141,7 +162,7 @@ func (s BENCOKeyDirService) PublishManifest(
 			RequestID: inFrame.RequestID,
 		},
 		Body: wire.SNAC_0xBE00_0x0003_BENCOKeyDirPublishReply{
-			Accepted: 1,
+			Accepted: wire.BENCOPublishStored,
 			Counter:  counter,
 		},
 	}, nil

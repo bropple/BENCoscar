@@ -4776,3 +4776,99 @@ func TestRandItemID(t *testing.T) {
 		})
 	}
 }
+
+// BENCO addition — the key directory clear endpoint. See mgmt_api.go.
+//
+// A hand-written stub rather than a generated mock: this interface has one
+// method, and adding it to .mockery.yaml would mean a generated file nobody can
+// regenerate without the tool installed.
+type stubKeyDirectoryAdmin struct {
+	cleared bool
+	err     error
+	calls   []state.IdentScreenName
+}
+
+func (s *stubKeyDirectoryAdmin) ClearKeyDirectory(_ context.Context, sn state.IdentScreenName) (bool, error) {
+	s.calls = append(s.calls, sn)
+	return s.cleared, s.err
+}
+
+// TestDeleteUserKeyDirHandler covers the operation that lets an account's
+// identity be replaced. It is the only way past the pin that stops a
+// password-holder taking an account over, so what it does when it is NOT meant
+// to fire matters as much as what it does when it is.
+func TestDeleteUserKeyDirHandler(t *testing.T) {
+	existing := &state.User{IdentScreenName: state.NewIdentScreenName("someuser")}
+
+	tt := []struct {
+		name       string
+		user       *state.User
+		userErr    error
+		cleared    bool
+		clearErr   error
+		statusCode int
+		wantCalls  int
+	}{
+		{
+			name:       "clears an account that had a directory",
+			user:       existing,
+			cleared:    true,
+			statusCode: http.StatusNoContent,
+			wantCalls:  1,
+		},
+		{
+			// Not an error. An operator repeating the call, or clearing an
+			// account that never bootstrapped, has got what they asked for.
+			name:       "succeeds with nothing to clear",
+			user:       existing,
+			cleared:    false,
+			statusCode: http.StatusNoContent,
+			wantCalls:  1,
+		},
+		{
+			// A typo'd screen name must not report success against nothing —
+			// an operator who believes they cleared an account and did not is
+			// worse off than one who was told plainly.
+			name:       "refuses an account that does not exist",
+			user:       nil,
+			statusCode: http.StatusNotFound,
+			wantCalls:  0,
+		},
+		{
+			name:       "reports a lookup failure rather than clearing blindly",
+			userErr:    io.ErrUnexpectedEOF,
+			statusCode: http.StatusInternalServerError,
+			wantCalls:  0,
+		},
+		{
+			name:       "reports a failure to clear",
+			user:       existing,
+			clearErr:   io.ErrUnexpectedEOF,
+			statusCode: http.StatusInternalServerError,
+			wantCalls:  1,
+		},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodDelete, "/user/someuser/keydir", nil)
+			request.SetPathValue("screenname", "someuser")
+			recorder := httptest.NewRecorder()
+
+			userManager := newMockUserManager(t)
+			userManager.EXPECT().
+				User(matchContext(), state.NewIdentScreenName("someuser")).
+				Return(tc.user, tc.userErr)
+
+			admin := &stubKeyDirectoryAdmin{cleared: tc.cleared, err: tc.clearErr}
+			deleteUserKeyDirHandler(recorder, request, admin, userManager, slog.Default())
+
+			if recorder.Code != tc.statusCode {
+				t.Errorf("want status %d, got %d", tc.statusCode, recorder.Code)
+			}
+			if len(admin.calls) != tc.wantCalls {
+				t.Errorf("want %d clear calls, got %d", tc.wantCalls, len(admin.calls))
+			}
+		})
+	}
+}

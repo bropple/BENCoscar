@@ -429,6 +429,7 @@ func MgmtAPI(deps Container) *http.Server {
 		deps.sqLiteUserStore,        // profileRetriever
 		deps.sqLiteUserStore,        // webAPIKeyManager
 		deps.sqLiteUserStore,        // icqProfileManager
+		deps.sqLiteUserStore,        // keyDirectoryAdmin
 		state.NewAccountCreator(deps.sqLiteUserStore.InsertUser),
 		logger,
 	)

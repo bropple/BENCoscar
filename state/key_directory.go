@@ -21,6 +21,14 @@ import (
 // accepting an older one would resurrect a machine the user had removed.
 var ErrStaleCounter = errors.New("manifest counter is not newer than the stored one")
 
+// ErrIdentityPinned is returned when a publish carries an identity key other
+// than the one the account already established.
+//
+// An account's identity is pinned by its first manifest. Replacing it requires an
+// administrator to clear the key directory first, which is destructive by design
+// -- see PublishManifest.
+var ErrIdentityPinned = errors.New("account is bound to a different identity key")
+
 // ErrCounterOutOfRange is returned for a counter SQLite cannot store faithfully.
 //
 // The wire field is uint64 and SQLite's INTEGER is signed, so anything above the
@@ -127,20 +135,30 @@ func (f SQLiteUserStore) KeyManifest(ctx context.Context, screenName IdentScreen
 //     manifest without it at a higher counter, so accepting an equal or lower
 //     one would let a replayed manifest bring a removed machine back.
 //
-//   - DIFFERENT identity key: the counter is reset to whatever the new manifest
-//     carries, with no monotonicity requirement across the change. A new identity
-//     legitimately starts at 1, and refusing that would mean an account that
-//     bootstrapped a fresh identity could never publish until it had counted past
-//     its own history.
+//   - DIFFERENT identity key: REFUSED. The identity is pinned on first publish.
 //
-// The server does NOT try to decide whether an identity change is legitimate,
-// and could not. It is either the account holder who lost everything and
-// bootstrapped again, or someone with the password who cleared the identity and
+// The refusal is the part worth explaining, because the server genuinely cannot
+// judge an identity change and does not try to. It is either the account holder
+// who lost everything and bootstrapped again, or someone with the password who
 // installed their own -- and those two are cryptographically indistinguishable
-// by construction. That is not a gap in the design, it is the property the design
-// is for: an operator can destroy or replace an identity but cannot silently
-// BECOME someone, because every contact sees the safety number move. Adjudicating
-// it is the client's job, and the client's answer is to ask a human.
+// by construction. That is not a gap in the design; it is the property the design
+// is for.
+//
+// What changed is who gets to break the tie. Accepting the change silently made
+// a password the whole account again: sign in, publish a fresh identity, and the
+// takeover was complete without anyone's approval, loud only in the sense that
+// contacts would eventually notice a safety number move. Refusing it moves the
+// decision to an administrator, who must clear the account's key directory
+// (ClearKeyDirectory, DELETE /user/{screenname}/keydir) before a new identity can
+// be bootstrapped.
+//
+// That is deliberately a DESTRUCTIVE operation and not a restorative one. An
+// operator who can restore your identity is an operator who can take it over, so
+// the operator keeps the account and loses the identity. Clearing returns the
+// account to the zero-device state, which is the same state a freshly provisioned
+// account is in -- so it is the provisioning path, not a special-cased backdoor,
+// and it lines up exactly with the device-attestation rule that an account with
+// no devices may sign in with a password alone.
 //
 // The whole thing runs in one transaction because the read and the write are a
 // compare-and-swap. Two concurrent publishes from an account's two devices would
@@ -182,8 +200,11 @@ func (f SQLiteUserStore) PublishManifest(ctx context.Context, screenName IdentSc
 			return uint64(storedCounter), fmt.Errorf("%w: got %d, hold %d", ErrStaleCounter, m.Counter, storedCounter)
 		}
 	default:
-		// A different identity. Accepted, and the counter starts over. See the
-		// doc comment: the server has no basis to judge this and does not try.
+		// A different identity. Refused: the account is pinned to the one it
+		// established, and only an administrator clearing the directory can
+		// release it. See the doc comment for why the tie is broken here and not
+		// by whoever publishes second.
+		return uint64(storedCounter), ErrIdentityPinned
 	}
 
 	// A plain REPLACE rather than an UPDATE-or-INSERT: publishing replaces the
@@ -305,6 +326,77 @@ type SupersededIdentityBackup struct {
 	// embedded backup, is when it was written -- together they bound the window
 	// in which this was the account's identity.
 	SupersededAt time.Time
+}
+
+// ClearKeyDirectory releases an account's pinned identity so it can bootstrap a
+// new one, and reports whether there was anything to clear.
+//
+// This is the administrative half of pinning. PublishManifest refuses a manifest
+// under a different identity key, which is what stops a password-holder taking an
+// account over quietly; the cost is that somebody who genuinely lost every device
+// AND their recovery phrase is stuck. This is the way out, and it is deliberately
+// the only one.
+//
+// It is DESTRUCTIVE, not restorative, and that asymmetry is the whole design: an
+// operator who can restore your identity is an operator who can take it over. So
+// the operator keeps the account and loses the identity. Afterwards the account
+// holds no manifest and no live backup, which is the state a freshly provisioned
+// account is in -- the same state the device-attestation rule reads as "no devices
+// published, so a password alone may sign in". One state, reached two ways, and
+// no special case in the auth path.
+//
+// What the account holder sees: every existing device stops being able to publish
+// under the old identity, and every contact's safety number moves when a new one
+// is bootstrapped. Cryptographically they are a new person, and nobody can prove
+// otherwise -- which is correct, because nobody can.
+//
+// The live backup is archived rather than deleted. Clearing is an operator
+// reacting to a story they have been told, and stories turn out to be wrong; the
+// history table is what makes a mistaken clear recoverable, and it is not
+// reachable over the wire. See migration 0038.
+func (f SQLiteUserStore) ClearKeyDirectory(ctx context.Context, screenName IdentScreenName) (cleared bool, err error) {
+	tx, err := f.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO keyDirIdentityBackupHistory
+			(identScreenName, kdf, params, salt, blob, updatedAt, supersededAt)
+		SELECT identScreenName, kdf, params, salt, blob, updatedAt, ?
+		FROM keyDirIdentityBackups WHERE identScreenName = ?`,
+		now, screenName.String()); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM keyDirIdentityBackupHistory
+		WHERE identScreenName = ? AND id NOT IN (
+			SELECT id FROM keyDirIdentityBackupHistory
+			WHERE identScreenName = ? ORDER BY id DESC LIMIT ?
+		)`,
+		screenName.String(), screenName.String(), identityBackupHistoryDepth); err != nil {
+		return false, err
+	}
+
+	manifests, err := tx.ExecContext(ctx,
+		`DELETE FROM keyDirManifests WHERE identScreenName = ?`, screenName.String())
+	if err != nil {
+		return false, err
+	}
+	backups, err := tx.ExecContext(ctx,
+		`DELETE FROM keyDirIdentityBackups WHERE identScreenName = ?`, screenName.String())
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+
+	nm, _ := manifests.RowsAffected()
+	nb, _ := backups.RowsAffected()
+	return nm+nb > 0, nil
 }
 
 // IdentityBackupHistory returns an account's superseded identity backups, most

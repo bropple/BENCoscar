@@ -169,6 +169,19 @@ type UserManager interface {
 	User(ctx context.Context, screenName state.IdentScreenName) (*state.User, error)
 }
 
+// KeyDirectoryAdmin is the administrative half of the BENCO key directory.
+//
+// One operation, and it is deliberately the only one exposed. Everything else
+// about the directory is client-driven and cryptographically self-enforcing:
+// manifests are signed by an identity the server merely stores, so there is
+// nothing for an operator to adjudicate. What an operator CAN do is destroy,
+// which is the escape hatch for an account whose identity is unrecoverable.
+type KeyDirectoryAdmin interface {
+	// ClearKeyDirectory releases an account's pinned identity so it can
+	// bootstrap a new one. Destructive; see state.ClearKeyDirectory.
+	ClearKeyDirectory(ctx context.Context, screenName state.IdentScreenName) (bool, error)
+}
+
 // ICQProfileManager defines methods for getting and setting ICQ user profile data.
 type ICQProfileManager interface {
 	// User returns all attributes for a user.
