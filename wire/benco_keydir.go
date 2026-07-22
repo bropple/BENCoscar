@@ -358,3 +358,47 @@ func init() {
 		BENCOKeyDirGetBackupReply:   "BENCOKeyDirGetBackupReply",
 	}
 }
+
+// Device attestation subgroups.
+//
+// A password proves an ACCOUNT. These prove a DEVICE: after sign-on the server
+// sends a nonce, and the session must return it signed by a device signing key
+// that appears in the account's current manifest. Until now every membership
+// check in the key directory was advisory precisely because the server had no
+// way to tell one device from another — a removed device that ignored the signal
+// kept full access, because it authenticated with the same password as before.
+const (
+	BENCOKeyDirAttestChallenge uint16 = 0x000A
+	BENCOKeyDirAttestResponse  uint16 = 0x000B
+	BENCOKeyDirAttestReply     uint16 = 0x000C
+)
+
+// BENCOAttestNonceLen is the challenge size. Generous: the nonce only has to be
+// unguessable for the life of one connection, and there is no reason to be tight
+// about 32 bytes.
+const BENCOAttestNonceLen = 32
+
+// SNAC_0xBE00_0x000A_BENCOKeyDirAttestChallenge asks a session to prove which
+// device it is.
+type SNAC_0xBE00_0x000A_BENCOKeyDirAttestChallenge struct {
+	Version uint8
+	Nonce   []byte `oscar:"len_prefix=uint16"`
+}
+
+// SNAC_0xBE00_0x000B_BENCOKeyDirAttestResponse answers one.
+//
+// The signing key travels alongside the signature so the server can pick the
+// right one out of the manifest instead of trying all of them; it is checked for
+// membership regardless, so sending somebody else's buys nothing.
+type SNAC_0xBE00_0x000B_BENCOKeyDirAttestResponse struct {
+	Version   uint8
+	SignKey   BENCOKey
+	Signature []byte `oscar:"len_prefix=uint16"`
+}
+
+// SNAC_0xBE00_0x000C_BENCOKeyDirAttestReply reports the outcome.
+type SNAC_0xBE00_0x000C_BENCOKeyDirAttestReply struct {
+	Version uint8
+	// Accepted is 1 when the session is now attested.
+	Accepted uint8
+}
