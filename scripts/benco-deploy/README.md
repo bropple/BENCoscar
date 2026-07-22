@@ -162,6 +162,40 @@ It installs a renewal deploy hook that copies the certificate into
 BENCoscar loads the keypair once at startup, so without it a renewed certificate
 would sit on disk unused until the old one expired and clients started failing.
 
+### `uninstall.sh`
+
+Removes everything `install.sh` created — unit, `/etc/bencoscar`,
+`/var/lib/bencoscar`, both binaries, the service user and the admin group — so a
+reinstall starts from nothing. `reset-db.sh` wipes the *database*; this wipes the
+*install*.
+
+**It keeps `/etc/letsencrypt` by default, and that is the point.** Let's Encrypt
+allows five duplicate certificates per registered domain per 168 hours, and
+BENCoscar treats a missing keypair as a startup error rather than falling back to
+cleartext — so a rebuild that cannot get a certificate is a rebuild that cannot
+start. `letsencrypt.sh` short-circuits when a live certificate already exists,
+which makes the reinstall free. `--purge-certs` overrides this, and says why not
+to.
+
+It refuses to run when `/var/lib/bencoscar` is a mount point, which is what the
+optional LUKS bundle makes it: `rm -rf` on a live mount empties the volume and
+leaves the mapping behind, so that bundle's own `uninstall.sh` has to go first.
+
+The database and the env file are copied to `/var/backups/bencoscar-<stamp>` at
+`0700` before anything is removed (`--purge-data` skips this). The env file is
+the only record of what was tuned by hand — `LOG_LEVEL`, `BENCO_DEVICE_AUTH`, the
+rate class — since `install.sh` writes a fresh one.
+
+The renewal deploy hook is removed even when the certificates are kept: it
+installs files owned by the service group, so with the group gone a renewal
+landing between uninstall and reinstall would fail. `letsencrypt.sh` writes it
+again.
+
+```bash
+sudo ./uninstall.sh --dry-run     # show the plan, change nothing
+sudo ./uninstall.sh               # asks you to type the service name
+```
+
 ## Accounts
 
 `DISABLE_AUTH=false`, so accounts must be provisioned before anyone can sign in.
