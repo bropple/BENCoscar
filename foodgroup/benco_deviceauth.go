@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -170,23 +171,35 @@ func (s *DeviceAuthService) Verify(
 // reason.
 func attestContext(screenName state.IdentScreenName, nonce []byte) []byte {
 	name := screenName.String()
-	out := make([]byte, 0, len(attestDomain)+1+len(name)+1+len(nonce))
+	out := make([]byte, 0, len(attestDomain)+1+4+len(name)+4+len(nonce))
 	out = append(out, attestDomain...)
 	out = append(out, 0x00)
-	out = append(out, name...)
-	out = append(out, 0x00)
-	out = append(out, nonce...)
+	out = appendLenPrefixed(out, []byte(name))
+	out = appendLenPrefixed(out, nonce)
 	return out
 }
 
-// attestDomain separates an attestation from everything else a device signing
-// key signs — room messages above all.
+// appendLenPrefixed writes a 32-bit length followed by the bytes.
 //
-// Without it the constructions collide: a room signature covers
-// `room || 0x00 || message`, and an attestation without a domain tag covers
-// `account || 0x00 || nonce`. Those are the same bytes when a room is named
-// after an account and carries the nonce as its text, so a room message could be
-// replayed as proof of device possession. It MUST match the client's constant.
+// Length prefixes rather than delimiters, because a NUL separator only separates
+// if it cannot occur in what it separates and nothing enforces that for a screen
+// name. MUST match the client's construction exactly.
+func appendLenPrefixed(dst, b []byte) []byte {
+	var n [4]byte
+	binary.BigEndian.PutUint32(n[:], uint32(len(b)))
+	dst = append(dst, n[:]...)
+	return append(dst, b...)
+}
+
+// attestDomain separates an attestation from everything else a device signing
+// key signs — room messages above all. It MUST match the client's constant.
+//
+// A tag on this side ALONE was not enough, and the first attempt made exactly
+// that mistake. The room context began `room || 0x00 || message` with no tag of
+// its own, so a room literally named "BENCO-ATTEST-v1" carrying
+// `account || 0x00 || nonce` produced identical bytes: the collision moved to a
+// different room name rather than closing. Both contexts are now tagged AND
+// length-prefixed, which is what makes one unable to spell the other.
 const attestDomain = "BENCO-ATTEST-v1"
 
 // SignAttestation produces the response a client sends. Here so the server's own

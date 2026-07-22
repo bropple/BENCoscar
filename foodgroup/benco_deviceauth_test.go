@@ -203,12 +203,16 @@ func TestAttestIsNotARoomSignature(t *testing.T) {
 	svc := NewDeviceAuthService(fakeManifests{stored: manifestWith(t, pub)})
 	nonce := mustNonce(t)
 
-	// The room-message construction, as internal/e2ee builds it.
-	roomCtx := append(append([]byte("alice"), 0x00), nonce...)
-	roomSig := ed25519.Sign(priv, roomCtx)
-
-	if err := svc.Verify(context.Background(), sn, nonce, pub, roomSig); err == nil {
-		t.Error("a room-message signature was accepted as a device attestation")
+	// Both the old untagged room construction AND the attack that defeated the
+	// first fix: a room NAMED after the attest domain.
+	for name, ctx := range map[string][]byte{
+		"untagged room context": append(append([]byte("alice"), 0x00), nonce...),
+		"room named after the attest domain": append(append(
+			append([]byte(attestDomain), 0x00), []byte("alice")...), append([]byte{0x00}, nonce...)...),
+	} {
+		if err := svc.Verify(context.Background(), sn, nonce, pub, ed25519.Sign(priv, ctx)); err == nil {
+			t.Errorf("%s was accepted as a device attestation", name)
+		}
 	}
 }
 
@@ -219,7 +223,7 @@ func TestAttestIsNotARoomSignature(t *testing.T) {
 // from "somebody changed a string constant".
 func TestAttestContextsMatchAcrossImplementations(t *testing.T) {
 	got := attestContext(state.NewIdentScreenName("alice"), []byte{1, 2, 3})
-	want := append(append(append([]byte("BENCO-ATTEST-v1"), 0x00), []byte("alice")...), 0x00, 1, 2, 3)
+	want := []byte("BENCO-ATTEST-v1\x00\x00\x00\x00\x05alice\x00\x00\x00\x03\x01\x02\x03")
 	if !bytes.Equal(got, want) {
 		t.Errorf("attest context = %q, want %q", got, want)
 	}

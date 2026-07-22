@@ -1076,6 +1076,24 @@ func (rt Handler) UserLookupFindByEmail(ctx context.Context, _ *state.SessionIns
 // ErrRouteNotFound error if no matching handler is found for the group:subGroup
 // pair in the request.
 func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter, listener config.Listener) error {
+	// A session that was challenged and has not answered does nothing but
+	// answer. Enforcement used to live only in the response handler, which meant
+	// a client that simply IGNORED the challenge was admitted forever — the
+	// exact adversary this exists for, a removed device holding the password,
+	// bypassed it by not implementing the SNAC. Silence must not be admission.
+	//
+	// Gating the dispatch rather than arming a timer: no goroutine per session,
+	// no clock to get wrong, and it degrades to "you can attest and nothing
+	// else" instead of a disconnect the client cannot explain.
+	if rt.DeviceAuthMode == foodgroup.DeviceAuthEnforce &&
+		instance != nil && len(instance.AttestNonce()) > 0 && !instance.Attested() &&
+		inFrame.FoodGroup != wire.BENCOKeyDir {
+		rt.Logger.WarnContext(ctx, "refusing a request from a session that has not proven its device",
+			"screen_name", instance.IdentScreenName().String(),
+			"food_group", inFrame.FoodGroup, "sub_group", inFrame.SubGroup)
+		return errors.New("session has not proven which device it is")
+	}
+
 	switch inFrame.FoodGroup {
 	case wire.Admin:
 		switch inFrame.SubGroup {
