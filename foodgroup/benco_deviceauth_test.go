@@ -188,3 +188,39 @@ func TestAttestRejectsAWrongSizedNonce(t *testing.T) {
 		t.Error("a short nonce was accepted")
 	}
 }
+
+// TestAttestIsNotARoomSignature: a device signing key also signs room messages,
+// and the two constructions must not collide.
+//
+// Before the domain tag they did: a room signature covers `room || 0x00 ||
+// message` and an attestation covered `account || 0x00 || nonce`, which are the
+// same bytes when a room is named after an account and carries the nonce as its
+// text. This test fails if they ever line up again — and it has to exist on BOTH
+// sides, because the two constants must agree.
+func TestAttestIsNotARoomSignature(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	sn := state.NewIdentScreenName("alice")
+	svc := NewDeviceAuthService(fakeManifests{stored: manifestWith(t, pub)})
+	nonce := mustNonce(t)
+
+	// The room-message construction, as internal/e2ee builds it.
+	roomCtx := append(append([]byte("alice"), 0x00), nonce...)
+	roomSig := ed25519.Sign(priv, roomCtx)
+
+	if err := svc.Verify(context.Background(), sn, nonce, pub, roomSig); err == nil {
+		t.Error("a room-message signature was accepted as a device attestation")
+	}
+}
+
+// TestAttestContextsMatchAcrossImplementations pins the exact bytes.
+//
+// The client and server build this independently. If they drift, every session
+// fails to attest and the symptom is "nobody can sign in", which is a long way
+// from "somebody changed a string constant".
+func TestAttestContextsMatchAcrossImplementations(t *testing.T) {
+	got := attestContext(state.NewIdentScreenName("alice"), []byte{1, 2, 3})
+	want := append(append(append([]byte("BENCO-ATTEST-v1"), 0x00), []byte("alice")...), 0x00, 1, 2, 3)
+	if !bytes.Equal(got, want) {
+		t.Errorf("attest context = %q, want %q", got, want)
+	}
+}

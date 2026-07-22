@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/mk6i/open-oscar-server/foodgroup"
 	"io"
 	"log/slog"
 
@@ -31,6 +32,10 @@ type ResponseWriter interface {
 // Handler defines a structure for routing OSCAR protocol requests to
 // appropriate handlers based on group:subGroup identifiers.
 type Handler struct {
+	// DeviceAuthMode is how strictly device attestation is applied. See
+	// foodgroup/benco_deviceauth.go and BENCO_DEVICE_AUTH.
+	DeviceAuthMode foodgroup.DeviceAuthMode
+
 	AdminService
 	BARTService
 	// BENCO addition — device key directory, foodgroup 0xBE00. The interface
@@ -909,14 +914,34 @@ func (rt Handler) OServiceServiceRequest(ctx context.Context, service uint16, in
 	return rw.SendSNAC(outSNAC.Frame, outSNAC.Body)
 }
 
-func (rt Handler) OServiceClientOnline(ctx context.Context, service uint16, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, _ ResponseWriter) error {
+func (rt Handler) OServiceClientOnline(ctx context.Context, service uint16, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
 	inBody := wire.SNAC_0x01_0x02_OServiceClientOnline{}
 	if err := wire.UnmarshalBE(&inBody, r); err != nil {
 		return err
 	}
 	rt.Logger.InfoContext(ctx, "user signed on")
 	rt.LogRequest(ctx, inFrame, inBody)
-	return rt.ClientOnline(ctx, service, inBody, instance)
+	if err := rt.ClientOnline(ctx, service, inBody, instance); err != nil {
+		return err
+	}
+
+	// Challenge for a device only on the BOS session. Chat and ChatNav
+	// connections are opened by an already-signed-on client, so challenging
+	// those would ask the same device to prove itself repeatedly for no gain.
+	//
+	// The mode is checked HERE rather than only inside Challenge so that a
+	// handler with attestation off never touches the service or the instance at
+	// all — which is also what keeps the zero-valued Handler used throughout the
+	// existing tests working.
+	if service == wire.BOS && rt.DeviceAuthMode != foodgroup.DeviceAuthOff && instance != nil {
+		if msg, nonce, ok := rt.BENCOKeyDirService.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName()); ok {
+			instance.SetAttestNonce(nonce)
+			if err := rw.SendSNAC(msg.Frame, msg.Body); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (rt Handler) PermitDenyRightsQuery(ctx context.Context, _ *state.SessionInstance, inFrame wire.SNACFrame, _ io.Reader, rw ResponseWriter) error {
@@ -1072,6 +1097,8 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 			return rt.BENCOKeyDirPutBackupRequest(ctx, instance, inFrame, r, rw)
 		case wire.BENCOKeyDirGetBackupRequest:
 			return rt.BENCOKeyDirGetBackupRequest(ctx, instance, inFrame, r, rw)
+		case wire.BENCOKeyDirAttestResponse:
+			return rt.BENCOKeyDirAttestResponse(ctx, instance, inFrame, r, rw)
 		}
 	case wire.Alert:
 		switch inFrame.SubGroup {

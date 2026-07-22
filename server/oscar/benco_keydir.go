@@ -2,6 +2,8 @@ package oscar
 
 import (
 	"context"
+	"errors"
+	"github.com/mk6i/open-oscar-server/foodgroup"
 	"io"
 
 	"github.com/mk6i/open-oscar-server/state"
@@ -26,6 +28,44 @@ type BENCOKeyDirService interface {
 	QueryManifest(ctx context.Context, inFrame wire.SNACFrame, inBody wire.SNAC_0xBE00_0x0004_BENCOKeyDirQueryRequest) (wire.SNACMessage, error)
 	PutBackup(ctx context.Context, sess *state.Session, inFrame wire.SNACFrame, inBody wire.SNAC_0xBE00_0x0006_BENCOKeyDirPutBackupRequest) (wire.SNACMessage, error)
 	GetBackup(ctx context.Context, sess *state.Session, inFrame wire.SNACFrame, inBody wire.SNAC_0xBE00_0x0008_BENCOKeyDirGetBackupRequest) (wire.SNACMessage, error)
+	// Device attestation. A password proves the ACCOUNT; these prove which
+	// DEVICE of it is talking, which is what makes removing a device mean
+	// anything. See foodgroup/benco_deviceauth.go.
+	Challenge(ctx context.Context, mode foodgroup.DeviceAuthMode, screenName state.IdentScreenName) (wire.SNACMessage, []byte, bool)
+	AttestResponse(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, inBody wire.SNAC_0xBE00_0x000B_BENCOKeyDirAttestResponse) (wire.SNACMessage, error)
+}
+
+// BENCOKeyDirAttestResponse handles a session's answer to a device challenge.
+func (rt Handler) BENCOKeyDirAttestResponse(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
+	inBody := wire.SNAC_0xBE00_0x000B_BENCOKeyDirAttestResponse{}
+	if err := wire.UnmarshalBE(&inBody, r); err != nil {
+		return err
+	}
+	outSNAC, err := rt.BENCOKeyDirService.AttestResponse(ctx, instance, inFrame, inBody)
+	if err != nil {
+		return err
+	}
+	rt.LogRequestAndResponse(ctx, inFrame, inBody, outSNAC.Frame, outSNAC.Body)
+
+	if err := rw.SendSNAC(outSNAC.Frame, outSNAC.Body); err != nil {
+		return err
+	}
+
+	// Enforcement happens here rather than inside the service, because closing a
+	// connection is the server loop's business and refusing to answer is not the
+	// same as refusing to serve.
+	if !instance.Attested() {
+		switch rt.DeviceAuthMode {
+		case foodgroup.DeviceAuthEnforce:
+			rt.Logger.WarnContext(ctx, "closing a session that could not prove its device",
+				"screen_name", instance.IdentScreenName().String())
+			return errors.New("device attestation failed")
+		case foodgroup.DeviceAuthLog:
+			rt.Logger.WarnContext(ctx, "session could not prove its device (log mode, admitted anyway)",
+				"screen_name", instance.IdentScreenName().String())
+		}
+	}
+	return nil
 }
 
 func (rt Handler) BENCOKeyDirPublishRequest(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {

@@ -345,6 +345,7 @@ func OSCAR(deps Container) *oscar.Server {
 		logger,
 		oServiceService,
 		oscar.Handler{
+			DeviceAuthMode:     foodgroup.ParseDeviceAuthMode(deps.cfg.DeviceAuth),
 			AdminService:       adminService,
 			BARTService:        bartService,
 			BENCOKeyDirService: bencoKeyDirService,

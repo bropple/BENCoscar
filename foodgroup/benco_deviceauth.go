@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 
@@ -169,15 +170,122 @@ func (s *DeviceAuthService) Verify(
 // reason.
 func attestContext(screenName state.IdentScreenName, nonce []byte) []byte {
 	name := screenName.String()
-	out := make([]byte, 0, len(name)+1+len(nonce))
+	out := make([]byte, 0, len(attestDomain)+1+len(name)+1+len(nonce))
+	out = append(out, attestDomain...)
+	out = append(out, 0x00)
 	out = append(out, name...)
 	out = append(out, 0x00)
 	out = append(out, nonce...)
 	return out
 }
 
+// attestDomain separates an attestation from everything else a device signing
+// key signs — room messages above all.
+//
+// Without it the constructions collide: a room signature covers
+// `room || 0x00 || message`, and an attestation without a domain tag covers
+// `account || 0x00 || nonce`. Those are the same bytes when a room is named
+// after an account and carries the nonce as its text, so a room message could be
+// replayed as proof of device possession. It MUST match the client's constant.
+const attestDomain = "BENCO-ATTEST-v1"
+
 // SignAttestation produces the response a client sends. Here so the server's own
 // tests exercise the same construction a client must.
 func SignAttestation(screenName state.IdentScreenName, nonce []byte, priv ed25519.PrivateKey) []byte {
 	return ed25519.Sign(priv, attestContext(screenName, nonce))
+}
+
+// ParseDeviceAuthMode turns the config string into a mode. Anything unrecognised
+// is treated as log, which is the safe reading: a typo must not silently disable
+// attestation, and must not silently lock everybody out either.
+func ParseDeviceAuthMode(s string) DeviceAuthMode {
+	switch s {
+	case "off":
+		return DeviceAuthOff
+	case "enforce":
+		return DeviceAuthEnforce
+	default:
+		return DeviceAuthLog
+	}
+}
+
+// Challenge builds the SNAC asking a session to prove its device, and returns
+// the nonce to remember.
+//
+// Returns ok=false when there is nothing to ask: the mode is off, or the account
+// has enrolled no devices and password auth stands alone.
+func (s *DeviceAuthService) Challenge(
+	ctx context.Context,
+	mode DeviceAuthMode,
+	screenName state.IdentScreenName,
+) (msg wire.SNACMessage, nonce []byte, ok bool) {
+
+	if mode == DeviceAuthOff {
+		return msg, nil, false
+	}
+	if _, err := s.EnrolledSigningKeys(ctx, screenName); err != nil {
+		if errors.Is(err, ErrNoDevicesEnrolled) {
+			return msg, nil, false
+		}
+		// Any other failure — an unreadable manifest, a storage fault — still
+		// gets a challenge. Refusing to ask would admit the session, which is
+		// the wrong direction for a fault we do not understand.
+	}
+
+	nonce = make([]byte, wire.BENCOAttestNonceLen)
+	if _, err := rand.Read(nonce); err != nil {
+		return msg, nil, false
+	}
+	return wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.BENCOKeyDir,
+			SubGroup:  wire.BENCOKeyDirAttestChallenge,
+		},
+		Body: wire.SNAC_0xBE00_0x000A_BENCOKeyDirAttestChallenge{
+			Version: wire.BENCOKeyDirVersion,
+			Nonce:   nonce,
+		},
+	}, nonce, true
+}
+
+// AttestResponse handles a session's answer to a challenge.
+func (s *DeviceAuthService) AttestResponse(
+	ctx context.Context,
+	instance *state.SessionInstance,
+	inFrame wire.SNACFrame,
+	inBody wire.SNAC_0xBE00_0x000B_BENCOKeyDirAttestResponse,
+) (wire.SNACMessage, error) {
+
+	accepted := uint8(0)
+	nonce := instance.AttestNonce()
+
+	switch {
+	case inBody.Version != wire.BENCOKeyDirVersion:
+		// Wrong payload version: not an answer we can evaluate.
+	case len(nonce) == 0:
+		// Answering a challenge that was never issued.
+	default:
+		err := s.Verify(ctx, instance.IdentScreenName(), nonce,
+			ed25519.PublicKey(inBody.SignKey.Key), inBody.Signature)
+		switch {
+		case err == nil, errors.Is(err, ErrNoDevicesEnrolled):
+			instance.SetAttested()
+			accepted = 1
+		default:
+			// Left unattested. What happens next is the caller's decision, and
+			// depends on the mode.
+		}
+	}
+
+	return wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.BENCOKeyDir,
+			SubGroup:  wire.BENCOKeyDirAttestReply,
+			RequestID: inFrame.RequestID,
+		},
+		Body: wire.SNAC_0xBE00_0x000C_BENCOKeyDirAttestReply{
+			Version:  wire.BENCOKeyDirVersion,
+			Accepted: accepted,
+		},
+	}, nil
 }

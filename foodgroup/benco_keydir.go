@@ -34,8 +34,9 @@ type KeyDirManager interface {
 // NewBENCOKeyDirService returns a device key directory service.
 func NewBENCOKeyDirService(logger *slog.Logger, keyDirManager KeyDirManager) BENCOKeyDirService {
 	return BENCOKeyDirService{
-		logger:        logger,
-		keyDirManager: keyDirManager,
+		logger:            logger,
+		keyDirManager:     keyDirManager,
+		DeviceAuthService: NewDeviceAuthService(keyDirManager),
 	}
 }
 
@@ -64,6 +65,10 @@ func NewBENCOKeyDirService(logger *slog.Logger, keyDirManager KeyDirManager) BEN
 type BENCOKeyDirService struct {
 	logger        *slog.Logger
 	keyDirManager KeyDirManager
+	// Device attestation rides on this foodgroup because it is the same
+	// question the directory already answers -- which devices does this account
+	// have -- asked of the session instead of about a peer.
+	*DeviceAuthService
 }
 
 // PublishManifest stores the sending account's signed device manifest.

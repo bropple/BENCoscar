@@ -381,7 +381,7 @@ const BENCOAttestNonceLen = 32
 // SNAC_0xBE00_0x000A_BENCOKeyDirAttestChallenge asks a session to prove which
 // device it is.
 type SNAC_0xBE00_0x000A_BENCOKeyDirAttestChallenge struct {
-	Version uint8
+	Version uint16
 	Nonce   []byte `oscar:"len_prefix=uint16"`
 }
 
@@ -391,14 +391,14 @@ type SNAC_0xBE00_0x000A_BENCOKeyDirAttestChallenge struct {
 // right one out of the manifest instead of trying all of them; it is checked for
 // membership regardless, so sending somebody else's buys nothing.
 type SNAC_0xBE00_0x000B_BENCOKeyDirAttestResponse struct {
-	Version   uint8
+	Version   uint16
 	SignKey   BENCOKey
 	Signature []byte `oscar:"len_prefix=uint16"`
 }
 
 // SNAC_0xBE00_0x000C_BENCOKeyDirAttestReply reports the outcome.
 type SNAC_0xBE00_0x000C_BENCOKeyDirAttestReply struct {
-	Version uint8
+	Version uint16
 	// Accepted is 1 when the session is now attested.
 	Accepted uint8
 }

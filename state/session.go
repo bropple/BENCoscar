@@ -906,6 +906,13 @@ type SessionInstance struct {
 	toc2MsgEnc        bool
 	icqDCInfo         wire.ICQDCInfo
 
+	// Device attestation. attestNonce is the challenge this session was issued;
+	// attested records that it answered with a signature from a device the
+	// account's manifest names. A password proves the ACCOUNT, and these prove
+	// which DEVICE of it is talking — see foodgroup/benco_deviceauth.go.
+	attestNonce []byte
+	attested    bool
+
 	// Per-session state
 	idle              bool
 	idleTime          time.Time
@@ -1042,6 +1049,34 @@ func (s *SessionInstance) SetIdle(dur time.Duration) {
 	s.idle = true
 	// set the time the instance became idle
 	s.idleTime = s.session.nowFn().Add(-dur)
+}
+
+// SetAttestNonce records the challenge issued to this session.
+func (s *SessionInstance) SetAttestNonce(n []byte) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.attestNonce = n
+}
+
+// AttestNonce returns the challenge issued to this session, if any.
+func (s *SessionInstance) AttestNonce() []byte {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.attestNonce
+}
+
+// SetAttested marks the session as having proven which device it is.
+func (s *SessionInstance) SetAttested() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.attested = true
+}
+
+// Attested reports whether this session proved which device it is.
+func (s *SessionInstance) Attested() bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.attested
 }
 
 // SetSignonComplete indicates that the instance has completed the sign-on sequence.
