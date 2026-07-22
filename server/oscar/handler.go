@@ -925,20 +925,35 @@ func (rt Handler) OServiceClientOnline(ctx context.Context, service uint16, inst
 		return err
 	}
 
-	// Challenge for a device only on the BOS session. Chat and ChatNav
-	// connections are opened by an already-signed-on client, so challenging
-	// those would ask the same device to prove itself repeatedly for no gain.
+	// Re-challenge a session that was challenged before sign-on and has not
+	// answered. The first challenge goes out on the session's FIRST SNAC — see
+	// gateDeviceAuth, which is where the gate arms — but that lands in the
+	// middle of the client's handshake, where BENCchat's synchronous reads skip
+	// unsolicited frames. Sign-on completing is the first moment the client is
+	// known to be listening, so in log mode this second challenge is the one
+	// that actually gets answered. A fresh nonce, because reusing one across
+	// re-issues would widen the window a captured signature stays valid in.
 	//
-	// The mode is checked HERE rather than only inside Challenge so that a
-	// handler with attestation off never touches the service or the instance at
-	// all — which is also what keeps the zero-valued Handler used throughout the
-	// existing tests working.
-	if service == wire.BOS && rt.DeviceAuthMode != foodgroup.DeviceAuthOff && instance != nil {
+	// Only the BOS session: chat and ChatNav connections are opened by an
+	// already-signed-on client, so challenging those would ask the same device
+	// to prove itself repeatedly for no gain. The mode is checked HERE rather
+	// than only inside Challenge so that a handler with attestation off never
+	// touches the service or the instance at all — which is also what keeps the
+	// zero-valued Handler used throughout the existing tests working.
+	if service == wire.BOS && rt.DeviceAuthMode != foodgroup.DeviceAuthOff &&
+		instance != nil && !instance.Attested() && len(instance.AttestNonce()) > 0 {
 		if msg, nonce, ok := rt.BENCOKeyDirService.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName()); ok {
 			instance.SetAttestNonce(nonce)
+			rt.Logger.InfoContext(ctx, "re-issued the device challenge at sign-on",
+				"screen_name", instance.IdentScreenName().String())
 			if err := rw.SendSNAC(msg.Frame, msg.Body); err != nil {
 				return err
 			}
+		} else {
+			// The account had devices at the first challenge and has none now —
+			// an operator cleared the directory mid-session. The rule reads the
+			// same either way: no devices, password stands alone.
+			instance.SetAttested()
 		}
 	}
 	return nil
@@ -1071,27 +1086,100 @@ func (rt Handler) UserLookupFindByEmail(ctx context.Context, _ *state.SessionIns
 	return rw.SendSNAC(outSNAC.Frame, outSNAC.Body)
 }
 
+// gateDeviceAuth is the dispatch-time half of device attestation. It reports
+// handled=true when the request was refused and answered here, meaning Handle
+// must not route it.
+//
+// The rule is the one sentence from foodgroup/benco_deviceauth.go: an account
+// with no devices may sign in with a password alone; an account with devices
+// must prove it holds one. The first version of this gate armed itself only
+// once a challenge had been issued, and the challenge was only issued by the
+// ClientOnline handler — so a client that skipped ClientOnline was never
+// challenged, never gated, and kept full access to ICBM, feedbag and the rest.
+// The exact adversary this exists for, a removed device holding the password,
+// bypassed enforcement by not announcing itself. The gate now keys on
+// NOT-ATTESTED, and the decision "does this account have anything to prove"
+// happens on the session's first SNAC, whatever that SNAC is.
+//
+// Only BOS connections are gated. Every other connection type requires a
+// cookie minted by ServiceRequest — which is itself gated here — so a chat or
+// directory connection presupposes a BOS session that already got through, and
+// chat session instances carry no attestation state of their own.
+func (rt Handler) gateDeviceAuth(ctx context.Context, server uint16, instance *state.SessionInstance, inFrame wire.SNACFrame, rw ResponseWriter) (handled bool, err error) {
+	if rt.DeviceAuthMode == foodgroup.DeviceAuthOff || server != wire.BOS ||
+		instance == nil || instance.Attested() {
+		return false, nil
+	}
+
+	// The session's first SNAC, so nothing has been decided yet. Ask the key
+	// directory whether the account has devices: no challenge back means no,
+	// and the session is marked attested rather than special-cased below, so
+	// that every later check reads the same state the bootstrap rule produced.
+	if len(instance.AttestNonce()) == 0 {
+		msg, nonce, ok := rt.BENCOKeyDirService.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName())
+		if !ok {
+			instance.SetAttested()
+			return false, nil
+		}
+		instance.SetAttestNonce(nonce)
+		// INFO, not debug: log mode's whole purpose is to let the operator
+		// compare challenges issued against challenges answered before
+		// flipping to enforce, and a challenge that was never logged cannot
+		// be counted. The unanswered half is logged at connection close — see
+		// dispatchIncomingMessages — and once here when work continues anyway.
+		rt.Logger.InfoContext(ctx, "issued a device challenge",
+			"screen_name", instance.IdentScreenName().String())
+		if err := rw.SendSNAC(msg.Frame, msg.Body); err != nil {
+			return true, err
+		}
+	}
+
+	// The answer to the challenge must get through, and nothing else needs to:
+	// subgroup granularity, not foodgroup. This once exempted all of
+	// wire.BENCOKeyDir, which let an unattested session fetch AND overwrite the
+	// identity-backup ciphertext — the one blob a removed device holding the
+	// password most wants, since it can be ground offline at leisure.
+	if inFrame.FoodGroup == wire.BENCOKeyDir && inFrame.SubGroup == wire.BENCOKeyDirAttestResponse {
+		return false, nil
+	}
+
+	// Log mode stops here: the session is admitted either way, and there is
+	// deliberately no per-SNAC "working while unattested" line, because every
+	// session is briefly in that state between receiving the challenge and its
+	// answer arriving — it would fire for the well-behaved client too and read
+	// as a fleet that cannot attest. The signal that actually decides whether
+	// enforce is safe is a session that ENDS unattested, and that is logged at
+	// connection close; see dispatchIncomingMessages.
+	if rt.DeviceAuthMode != foodgroup.DeviceAuthEnforce {
+		return false, nil
+	}
+
+	// Refused with a diagnostic, not a teardown. Gating the dispatch rather
+	// than arming a timer: no goroutine per session, no clock to get wrong,
+	// and the session degrades to "you can attest and nothing else" — the
+	// connection stays up precisely so the attestation path stays open, and
+	// the error frame gives the client something to tell the user beyond a
+	// dead socket. Logged once per session, not once per SNAC, so a client
+	// that keeps sending cannot write the log at its own pace.
+	if instance.NoteUnattestedUse() {
+		rt.Logger.WarnContext(ctx, "refusing requests from a session that has not proven its device",
+			"screen_name", instance.IdentScreenName().String(),
+			"food_group", inFrame.FoodGroup, "sub_group", inFrame.SubGroup)
+	}
+	return true, rw.SendSNAC(wire.SNACFrame{
+		FoodGroup: inFrame.FoodGroup,
+		SubGroup:  0x01, // error subgroup for all SNACs
+		RequestID: inFrame.RequestID,
+	}, wire.SNACError{Code: wire.ErrorCodeInsufficientRights})
+}
+
 // Handle directs an incoming OSCAR request to the appropriate handler based on
 // its group and subGroup identifiers found in the SNAC frame. It returns an
 // ErrRouteNotFound error if no matching handler is found for the group:subGroup
 // pair in the request.
 func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter, listener config.Listener) error {
-	// A session that was challenged and has not answered does nothing but
-	// answer. Enforcement used to live only in the response handler, which meant
-	// a client that simply IGNORED the challenge was admitted forever — the
-	// exact adversary this exists for, a removed device holding the password,
-	// bypassed it by not implementing the SNAC. Silence must not be admission.
-	//
-	// Gating the dispatch rather than arming a timer: no goroutine per session,
-	// no clock to get wrong, and it degrades to "you can attest and nothing
-	// else" instead of a disconnect the client cannot explain.
-	if rt.DeviceAuthMode == foodgroup.DeviceAuthEnforce &&
-		instance != nil && len(instance.AttestNonce()) > 0 && !instance.Attested() &&
-		inFrame.FoodGroup != wire.BENCOKeyDir {
-		rt.Logger.WarnContext(ctx, "refusing a request from a session that has not proven its device",
-			"screen_name", instance.IdentScreenName().String(),
-			"food_group", inFrame.FoodGroup, "sub_group", inFrame.SubGroup)
-		return errors.New("session has not proven which device it is")
+	if handled, err := rt.gateDeviceAuth(ctx, server, instance, inFrame, rw); handled || err != nil {
+		return err
 	}
 
 	switch inFrame.FoodGroup {

@@ -76,8 +76,19 @@ func main() {
 	api := MgmtAPI(deps)
 	g.Go(api.ListenAndServe)
 
+	// BENCO: TOC and legacy ICQ are OFF unless explicitly enabled, inverting the
+	// upstream default. Both servers drive the foodgroup services directly and
+	// never pass through oscar.Handler.Handle, so nothing on those paths asks a
+	// session to prove its device -- they would be a clean bypass of enforcement
+	// the OSCAR port applies. They are also plaintext (TOC additionally carries a
+	// reversibly-"roasted" password) on a deployment that is TLS-only by design.
+	// The upstream code is gated rather than removed: enabling either is a
+	// legitimate choice for a deployment that wants vintage clients and accepts
+	// what that costs, but it has to be a choice.
 	toc := TOC(deps)
-	g.Go(toc.ListenAndServe)
+	if deps.cfg.TOCEnabled {
+		g.Go(toc.ListenAndServe)
+	}
 
 	// BENCO: the WebAPI server is removed from this fork and cannot be enabled.
 	//
@@ -107,7 +118,9 @@ func main() {
 	_ = oscar.Shutdown(shutdownCtx)
 	_ = kerb.Shutdown(shutdownCtx)
 	_ = api.Shutdown(shutdownCtx)
-	_ = toc.Shutdown(shutdownCtx)
+	if deps.cfg.TOCEnabled {
+		_ = toc.Shutdown(shutdownCtx)
+	}
 	if deps.cfg.ICQLegacy.Enabled {
 		_ = icqLegacy.Shutdown(shutdownCtx)
 	}

@@ -478,10 +478,10 @@ func TestKeyDirectory_ReplacedBackupIsArchived(t *testing.T) {
 	assert.False(t, history[0].SupersededAt.IsZero())
 }
 
-// TestKeyDirectory_BackupHistoryIsBoundedAndOrdered: an attacker who overwrites
-// repeatedly must not be able to push the good row out of the archive, and the
-// archive must not grow without limit -- every retained row is the identity key
-// under a phrase that has since been retired.
+// TestKeyDirectory_BackupHistoryIsBoundedAndOrdered: the archive must not grow
+// without limit -- every retained row is the identity key under a phrase that
+// has since been retired -- and what the trim keeps is the pinned first row plus
+// the newest ones, in newest-first order.
 func TestKeyDirectory_BackupHistoryIsBoundedAndOrdered(t *testing.T) {
 	f, sns := newKeyDirStore(t, "me")
 	ctx := context.Background()
@@ -497,11 +497,55 @@ func TestKeyDirectory_BackupHistoryIsBoundedAndOrdered(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, history, identityBackupHistoryDepth, "the archive is capped")
 
-	// Newest first, and the newest archived row is the one written just before
-	// the live one.
-	assert.Equal(t, []byte{byte(total - 2)}, history[0].Blob)
-	for i := 1; i < len(history); i++ {
+	// Newest first: the newest archived row is the one written just before the
+	// live one, then a contiguous run of its predecessors.
+	for i := 0; i < len(history)-1; i++ {
 		assert.Equal(t, []byte{byte(total - 2 - i)}, history[i].Blob)
+	}
+	// And the last retained row is the FIRST backup ever archived, not the
+	// oldest survivor of a newest-N trim. That row is the one no
+	// password-holder could have authored.
+	assert.Equal(t, []byte{0}, history[len(history)-1].Blob)
+}
+
+// TestKeyDirectory_FirstBackupSurvivesArchiveFlooding is the attack the pin
+// exists for: an attacker holding only the password overwrites the backup with
+// junk until the genuine row falls out of a newest-N archive. Under the old
+// trim, depth+1 writes destroyed the identity key irrecoverably; the depth was
+// not a defence, it was a countdown. The property is that NO number of
+// overwrites evicts the first-ever backup, so the flood sizes here bracket the
+// old breaking point rather than testing one lucky value.
+func TestKeyDirectory_FirstBackupSurvivesArchiveFlooding(t *testing.T) {
+	genuine := IdentityBackup{
+		KDF: 1, Params: []byte("p"), Salt: []byte("s"), Blob: []byte("the-real-identity"),
+	}
+
+	// One account per flood size, on one store, so each history is independent.
+	f, sns := newKeyDirStore(t, "victim1", "victim2", "victim3")
+	ctx := context.Background()
+
+	for n, floods := range []int{
+		identityBackupHistoryDepth,     // old trim: genuine row barely survives
+		identityBackupHistoryDepth + 1, // old trim: genuine row destroyed
+		3 * identityBackupHistoryDepth, // a patient attacker
+	} {
+		// The user bootstraps; the attacker then floods with junk that passes
+		// every validation, because it is ciphertext and there is nothing to
+		// validate.
+		require.NoError(t, f.SetIdentityBackup(ctx, sns[n], genuine))
+		for i := 0; i < floods; i++ {
+			require.NoError(t, f.SetIdentityBackup(ctx, sns[n], IdentityBackup{
+				KDF: 1, Params: []byte("p"), Salt: []byte("s"), Blob: []byte{byte(i)},
+			}))
+		}
+
+		history, err := f.IdentityBackupHistory(ctx, sns[n])
+		require.NoError(t, err)
+		assert.LessOrEqual(t, len(history), identityBackupHistoryDepth,
+			"%d floods: the archive must stay bounded", floods)
+		require.NotEmpty(t, history)
+		assert.Equal(t, genuine.Blob, history[len(history)-1].Blob,
+			"%d floods: the genuine backup must remain recoverable", floods)
 	}
 }
 

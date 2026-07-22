@@ -268,7 +268,8 @@ func (f SQLiteUserStore) IdentityBackup(ctx context.Context, screenName IdentScr
 // existing devices, but it means no manifest can ever be signed again, so the
 // device set is frozen for the life of the account. Archiving makes that
 // recoverable by an operator; see migration 0038 for why prevention does not
-// belong here.
+// belong here. The archive itself must not be destructible the same way, which
+// is why the trim below pins the oldest row -- see trimIdentityBackupHistory.
 func (f SQLiteUserStore) SetIdentityBackup(ctx context.Context, screenName IdentScreenName, b IdentityBackup) error {
 	tx, err := f.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -292,15 +293,9 @@ func (f SQLiteUserStore) SetIdentityBackup(ctx context.Context, screenName Ident
 	// Keep the archive bounded. Every retained row is the same identity key
 	// wrapped under a phrase that has since been retired -- sometimes retired
 	// BECAUSE it may have been seen -- so holding them forever slowly widens what
-	// a stolen database is worth, and the recovery this exists for uses the most
-	// recent ones.
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM keyDirIdentityBackupHistory
-		WHERE identScreenName = ? AND id NOT IN (
-			SELECT id FROM keyDirIdentityBackupHistory
-			WHERE identScreenName = ? ORDER BY id DESC LIMIT ?
-		)`,
-		screenName.String(), screenName.String(), identityBackupHistoryDepth); err != nil {
+	// a stolen database is worth. See trimIdentityBackupHistory for what the trim
+	// may and may not discard.
+	if err := trimIdentityBackupHistory(ctx, tx, screenName); err != nil {
 		return err
 	}
 
@@ -313,10 +308,48 @@ func (f SQLiteUserStore) SetIdentityBackup(ctx context.Context, screenName Ident
 	return tx.Commit()
 }
 
+// trimIdentityBackupHistory bounds an account's archive to
+// identityBackupHistoryDepth rows while NEVER discarding the oldest one.
+//
+// The pin is the security property, not the depth. An earlier version trimmed
+// to the newest N alone and claimed depth was "deep enough to survive an
+// attacker overwriting repeatedly" -- it was not, it was a countdown: N+1 junk
+// writes with the password pushed the genuine backup out of the archive and
+// destroyed the identity key for good. No depth fixes that, because the
+// attacker sets the pace. What a password-holder can never do is have authored
+// the FIRST backup -- that was written by whoever bootstrapped the identity --
+// so the oldest archived row is the one row known to predate them, and it is
+// exempt from the trim. Flooding can now only ever cost the middle of the
+// history, never the recovery this table exists for.
+//
+// One honest caveat: "oldest" means oldest since the account's history began,
+// so after an administrative ClearKeyDirectory the pinned row belongs to the
+// destroyed identity, and the bootstrap backup of the NEW identity is only as
+// safe as the newest-rows window. That is the state where the operator is
+// already involved by definition, which is why it is tolerated rather than
+// tracked with a marker.
+func trimIdentityBackupHistory(ctx context.Context, tx *sql.Tx, screenName IdentScreenName) error {
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM keyDirIdentityBackupHistory
+		WHERE identScreenName = ?
+		AND id NOT IN (
+			SELECT MIN(id) FROM keyDirIdentityBackupHistory
+			WHERE identScreenName = ?
+		)
+		AND id NOT IN (
+			SELECT id FROM keyDirIdentityBackupHistory
+			WHERE identScreenName = ? ORDER BY id DESC LIMIT ?
+		)`,
+		screenName.String(), screenName.String(), screenName.String(),
+		identityBackupHistoryDepth-1)
+	return err
+}
+
 // identityBackupHistoryDepth is how many superseded identity backups are kept
-// per account. Deep enough to survive an attacker overwriting repeatedly to push
-// the good row out, shallow enough that retired recovery phrases do not
-// accumulate indefinitely.
+// per account: the pinned oldest row plus this many minus one of the newest.
+// The bound only limits how much retired-phrase ciphertext a stolen database
+// yields; it is NOT what protects the genuine backup from being flooded out --
+// the pin in trimIdentityBackupHistory is.
 const identityBackupHistoryDepth = 20
 
 // SupersededIdentityBackup is an identity backup that has since been replaced.
@@ -370,13 +403,7 @@ func (f SQLiteUserStore) ClearKeyDirectory(ctx context.Context, screenName Ident
 		now, screenName.String()); err != nil {
 		return false, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM keyDirIdentityBackupHistory
-		WHERE identScreenName = ? AND id NOT IN (
-			SELECT id FROM keyDirIdentityBackupHistory
-			WHERE identScreenName = ? ORDER BY id DESC LIMIT ?
-		)`,
-		screenName.String(), screenName.String(), identityBackupHistoryDepth); err != nil {
+	if err := trimIdentityBackupHistory(ctx, tx, screenName); err != nil {
 		return false, err
 	}
 

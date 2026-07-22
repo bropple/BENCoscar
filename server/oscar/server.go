@@ -592,6 +592,21 @@ func (s oscarServer) dispatchIncomingMessages(
 	listener config.Listener,
 ) error {
 	defer func() {
+		// A nonce with no attestation at close means the session was asked to
+		// prove its device and never did — the one adversary shape log mode
+		// exists to surface. Without this line, a session that simply ignored
+		// its challenge produced NO output at all, so "every session attested"
+		// and "half of them never answered" read identically, and flipping to
+		// enforce on that silence would have locked out exactly the clients the
+		// log was supposed to clear. No mode check needed: a nonce only exists
+		// when attestation is on. Scoped to the BOS connection because auxiliary
+		// service connections share the BOS session's instance, and one of those
+		// closing says nothing about whether the challenge will still be
+		// answered.
+		if fg == wire.BOS && len(instance.AttestNonce()) > 0 && !instance.Attested() {
+			s.logger.WarnContext(ctx, "session closed without answering its device challenge",
+				"screen_name", instance.IdentScreenName().String())
+		}
 		s.logger.InfoContext(ctx, "user disconnected")
 	}()
 

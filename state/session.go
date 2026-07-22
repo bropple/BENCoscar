@@ -910,8 +910,10 @@ type SessionInstance struct {
 	// attested records that it answered with a signature from a device the
 	// account's manifest names. A password proves the ACCOUNT, and these prove
 	// which DEVICE of it is talking — see foodgroup/benco_deviceauth.go.
-	attestNonce []byte
-	attested    bool
+	// unattestedUse deduplicates the gate's log line; see NoteUnattestedUse.
+	attestNonce   []byte
+	attested      bool
+	unattestedUse bool
 
 	// Per-session state
 	idle              bool
@@ -1077,6 +1079,19 @@ func (s *SessionInstance) Attested() bool {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 	return s.attested
+}
+
+// NoteUnattestedUse records that the session was seen doing ordinary work
+// without having proven its device, and reports whether this sighting is the
+// first. The dispatch gate uses it to log the condition once per session
+// instead of once per SNAC — the operator needs to know it happened, not to
+// have the log flooded at the attacker's send rate.
+func (s *SessionInstance) NoteUnattestedUse() bool {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	first := !s.unattestedUse
+	s.unattestedUse = true
+	return first
 }
 
 // SetSignonComplete indicates that the instance has completed the sign-on sequence.

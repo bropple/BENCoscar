@@ -361,6 +361,13 @@ func WithBENCOKeyDirRateLimits(limits SNACRateLimits) SNACRateLimits {
 		BENCOKeyDirPutBackupReply:   1,
 		BENCOKeyDirGetBackupRequest: 1,
 		BENCOKeyDirGetBackupReply:   1,
+		// The attestation subgroups were originally left out of this map, which
+		// meant every AttestResponse hit the dispatcher's "rate limit not found,
+		// allowing request through" path — attestation traffic was the one part
+		// of the foodgroup with no rate class at all.
+		BENCOKeyDirAttestChallenge: 1,
+		BENCOKeyDirAttestResponse:  1,
+		BENCOKeyDirAttestReply:     1,
 	}
 	return limits
 }
@@ -378,6 +385,9 @@ func init() {
 		BENCOKeyDirPutBackupReply:   "BENCOKeyDirPutBackupReply",
 		BENCOKeyDirGetBackupRequest: "BENCOKeyDirGetBackupRequest",
 		BENCOKeyDirGetBackupReply:   "BENCOKeyDirGetBackupReply",
+		BENCOKeyDirAttestChallenge:  "BENCOKeyDirAttestChallenge",
+		BENCOKeyDirAttestResponse:   "BENCOKeyDirAttestResponse",
+		BENCOKeyDirAttestReply:      "BENCOKeyDirAttestReply",
 	}
 }
 
