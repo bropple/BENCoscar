@@ -3603,6 +3603,11 @@ func TestFeedbagService_RequestAuthorizeToHost(t *testing.T) {
 		expectOutput wire.SNACMessage
 		// expectICBM is true when RequestAuthorizeToHost should route via icbmSender
 		expectICBM bool
+		// relResult is what the RelationshipFetcher returns for the block check
+		// at the top of the handler; the zero value is "no block either way".
+		relResult state.Relationship
+		// relErr is the error the RelationshipFetcher returns, if any
+		relErr error
 	}{
 		{
 			name:     "recipient is online with feedbag, relay authorization request",
@@ -3957,6 +3962,47 @@ func TestFeedbagService_RequestAuthorizeToHost(t *testing.T) {
 			wantErr:    assert.AnError,
 			expectICBM: true,
 		},
+		{
+			// B1 (2026-07-23 live test): the recipient blocked the requester,
+			// so the request must not be relayed at all. The handler returns
+			// before it ever resolves the recipient's session — no relay, no
+			// ICBM — and reports success so the requester learns nothing.
+			name:     "recipient has blocked the requester, request is dropped",
+			instance: newTestInstance("100001", sessOptUIN(100001)),
+			inSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagRequestAuthorizeToHost,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x18_FeedbagRequestAuthorizationToHost{
+					ScreenName: "100002",
+					Reason:     "please add me.",
+				},
+			},
+			relResult:  state.Relationship{BlocksYou: true},
+			expectICBM: false,
+		},
+		{
+			// The mirror: the requester has blocked the recipient. Relaying an
+			// add request to someone you've blocked is nonsensical; drop it the
+			// same way.
+			name:     "requester has blocked the recipient, request is dropped",
+			instance: newTestInstance("100001", sessOptUIN(100001)),
+			inSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagRequestAuthorizeToHost,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x18_FeedbagRequestAuthorizationToHost{
+					ScreenName: "100002",
+					Reason:     "please add me.",
+				},
+			},
+			relResult:  state.Relationship{YouBlock: true},
+			expectICBM: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3994,7 +4040,17 @@ func TestFeedbagService_RequestAuthorizeToHost(t *testing.T) {
 					Return(params.result, params.err)
 			}
 
-			svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, nil, sessionRetriever, contactPreAuth, userManager, newMockBuddyAddedNotifierDeduper(t))
+			// The handler consults the block relationship first, on every call,
+			// so wire exactly one expectation from the case's configured result.
+			recipient := state.NewIdentScreenName(
+				tt.inSNAC.Body.(wire.SNAC_0x13_0x18_FeedbagRequestAuthorizationToHost).ScreenName,
+			)
+			relationshipFetcher := newMockRelationshipFetcher(t)
+			relationshipFetcher.EXPECT().
+				Relationship(matchContext(), tt.instance.IdentScreenName(), recipient).
+				Return(tt.relResult, tt.relErr)
+
+			svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, relationshipFetcher, sessionRetriever, contactPreAuth, userManager, newMockBuddyAddedNotifierDeduper(t))
 			svc.icbmSender = icbmSender
 
 			haveErr := svc.RequestAuthorizeToHost(

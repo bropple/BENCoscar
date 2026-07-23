@@ -682,6 +682,22 @@ func (s *FeedbagService) Use(ctx context.Context, instance *state.SessionInstanc
 // is relayed to the recipient via messageRelayer.
 func (s *FeedbagService) RequestAuthorizeToHost(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, inBody wire.SNAC_0x13_0x18_FeedbagRequestAuthorizationToHost) error {
 	recipient := state.NewIdentScreenName(inBody.ScreenName)
+
+	// A block is a server-enforced guarantee: someone who has blocked you must
+	// not receive your authorization request any more than they receive your
+	// messages or warnings — ICBMService.ChannelMsgToHost and EvilRequest gate
+	// on exactly this. Without it the request is relayed straight through below,
+	// which is a place an ordinary client defeats a block. Drop it silently: the
+	// requester learns nothing, the same way a message to a blocker is answered
+	// as though the recipient were merely offline.
+	rel, err := s.relationshipFetcher.Relationship(ctx, instance.IdentScreenName(), recipient)
+	if err != nil {
+		return fmt.Errorf("relationshipFetcher.Relationship: %w", err)
+	}
+	if rel.BlocksYou || rel.YouBlock {
+		return nil
+	}
+
 	recipSess := s.sessionRetriever.RetrieveSession(recipient)
 	useFeedbag := recipSess != nil && recipSess.UsesFeedbag()
 
