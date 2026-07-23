@@ -281,6 +281,14 @@ func (c *apiClient) deleteUser(ctx context.Context, screenName string) error {
 		userWithPassword{ScreenName: screenName}, nil)
 }
 
+// clearKeyDirectory resets an account's encryption identity: it clears the
+// device manifest AND the identity backup, returning the account to the
+// zero-device state where password auth stands alone. This is the documented
+// recovery for an account that has lost access to all its devices.
+func (c *apiClient) clearKeyDirectory(ctx context.Context, screenName string) error {
+	return c.do(ctx, http.MethodDelete, "/user/"+urlPathEscape(screenName)+"/keydir", nil, nil)
+}
+
 func (c *apiClient) listSessions(ctx context.Context) (onlineUsers, error) {
 	var out onlineUsers
 	err := c.do(ctx, http.MethodGet, "/session", nil, &out)

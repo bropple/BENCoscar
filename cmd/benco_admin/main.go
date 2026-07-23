@@ -72,6 +72,10 @@ func printUsage() {
 	fmt.Println("  user add <screenname>     Create an account")
 	fmt.Println("  user passwd <screenname>  Reset an account password")
 	fmt.Println("  user rm <screenname>      Delete an account")
+	fmt.Println("  user devices clear <screenname>")
+	fmt.Println("                            Reset an account's encryption identity (clears")
+	fmt.Println("                            every device and the backup; password auth alone")
+	fmt.Println("                            after). Recovery for a lost-all-devices account.")
 	fmt.Println("\nSession commands:")
 	fmt.Println("  session list              Show who is online")
 	fmt.Println("  session kick <screenname> Disconnect a signed-in user")
@@ -266,9 +270,58 @@ func runUser(args []string, stdout io.Writer) error {
 			return errors.New("usage: benco_admin user rm <screenname>")
 		}
 		return userRm(opts, positional[0])
+	case "devices":
+		return runUserDevices(positional, opts)
 	default:
 		return fmt.Errorf("unknown user command: %s", sub)
 	}
+}
+
+// runUserDevices dispatches the `user devices ...` subcommands. Only `clear`
+// exists today; it is here as a group rather than a flat `user clear-devices`
+// so that adding `user devices list` later needs no rename.
+func runUserDevices(positional []string, opts commonOpts) error {
+	if len(positional) == 0 {
+		return errors.New("usage: benco_admin user devices clear <screenname>")
+	}
+	switch positional[0] {
+	case "clear":
+		if len(positional) != 2 {
+			return errors.New("usage: benco_admin user devices clear <screenname>")
+		}
+		return userDevicesClear(opts, positional[1])
+	default:
+		return fmt.Errorf("unknown devices command: %s", positional[0])
+	}
+}
+
+// userDevicesClear resets an account's encryption identity, the recovery path
+// for an account that has lost every device. It is deliberately loud: this is
+// the operation that lets an identity be replaced, so the confirmation spells
+// out that it clears the backup too and moves every contact's safety number.
+func userDevicesClear(opts commonOpts, screenName string) error {
+	c, err := clientFor(opts)
+	if err != nil {
+		return err
+	}
+	if err := confirm(fmt.Sprintf(
+		"This resets %q's encryption identity. It clears every enrolled device AND the "+
+			"identity backup, so the account returns to having no devices and can sign in with "+
+			"its password alone. The next device to sign in bootstraps a NEW identity, which "+
+			"moves the safety number every contact holds for this account, and nothing sent "+
+			"under the old identity will be readable by the new one. Use it only when the account "+
+			"has lost access to all of its devices.", screenName), opts); err != nil {
+		return err
+	}
+	cx, cancel := ctx()
+	defer cancel()
+
+	if err := c.clearKeyDirectory(cx, screenName); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Cleared %s's key directory. It can now sign in with its password and "+
+		"set up a fresh identity.\n", screenName)
+	return nil
 }
 
 func userList(opts commonOpts, stdout io.Writer) error {

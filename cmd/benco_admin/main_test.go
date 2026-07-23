@@ -640,3 +640,50 @@ func TestCommandsRequireTheirArgument(t *testing.T) {
 		assert.Contains(t, err.Error(), "usage:")
 	}
 }
+
+func TestClearKeyDirectoryRequestConstruction(t *testing.T) {
+	var got capturedRequest
+	srv := newTestServer(t, http.StatusNoContent, "", &got)
+
+	c := newAPIClient(srv.URL, "")
+	require.NoError(t, c.clearKeyDirectory(context.Background(), "Cool Maximus"))
+
+	assert.Equal(t, http.MethodDelete, got.method)
+	// Path-escaped so a name with a space produces a well-formed request, and the
+	// keydir suffix targets the reset endpoint rather than account deletion.
+	assert.Equal(t, "/user/Cool Maximus/keydir", got.path)
+}
+
+func TestUserDevicesRouting(t *testing.T) {
+	opts := commonOpts{api: defaultAPIAddr}
+
+	t.Run("no action is a usage error", func(t *testing.T) {
+		err := runUserDevices(nil, opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "devices clear")
+	})
+
+	t.Run("clear without a name is a usage error", func(t *testing.T) {
+		err := runUserDevices([]string{"clear"}, opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "devices clear")
+	})
+
+	t.Run("unknown action is rejected", func(t *testing.T) {
+		err := runUserDevices([]string{"frobnicate", "someone"}, opts)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown devices command")
+	})
+}
+
+// The full command path — clear <name> with confirmation skipped — reaches the
+// keydir endpoint. Points --api at a test server so no real socket is needed.
+func TestUserDevicesClearHitsEndpoint(t *testing.T) {
+	var got capturedRequest
+	srv := newTestServer(t, http.StatusNoContent, "", &got)
+
+	err := runUserDevices([]string{"clear", "usec"}, commonOpts{api: srv.URL, yes: true})
+	require.NoError(t, err)
+	assert.Equal(t, http.MethodDelete, got.method)
+	assert.Equal(t, "/user/usec/keydir", got.path)
+}
