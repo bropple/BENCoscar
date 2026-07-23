@@ -2,7 +2,6 @@ package oscar
 
 import (
 	"context"
-	"errors"
 	"github.com/mk6i/open-oscar-server/foodgroup"
 	"io"
 
@@ -51,15 +50,23 @@ func (rt Handler) BENCOKeyDirAttestResponse(ctx context.Context, instance *state
 		return err
 	}
 
-	// Enforcement happens here rather than inside the service, because closing a
-	// connection is the server loop's business and refusing to answer is not the
-	// same as refusing to serve.
+	// A failed attestation degrades the session, it does NOT close it. Closing
+	// here would end the connection the instant a LINKING device answers with the
+	// key it has not enrolled yet — before it can publish the manifest that would
+	// enrol it. gateDeviceAuth already refuses everything from an unattested
+	// session except a publish and a re-attest, so the session sits at exactly
+	// "you may enrol and prove yourself, nothing else" and the client recovers in
+	// place: publish, then answer again (the nonce is kept across this failure).
+	// A session that never recovers stays degraded, which denies it the same
+	// service a teardown did — without the reconnect loop, and with the
+	// attestation path held open so recovery is possible at all. Enforcement of
+	// "unattested can do nothing useful" lives in the gate; this handler's job is
+	// only to record the outcome.
 	if !instance.Attested() {
 		switch rt.DeviceAuthMode {
 		case foodgroup.DeviceAuthEnforce:
-			rt.Logger.WarnContext(ctx, "closing a session that could not prove its device",
+			rt.Logger.WarnContext(ctx, "session has not proven its device; degraded until it does",
 				"screen_name", instance.IdentScreenName().String())
-			return errors.New("device attestation failed")
 		case foodgroup.DeviceAuthLog:
 			rt.Logger.WarnContext(ctx, "session could not prove its device (log mode, admitted anyway)",
 				"screen_name", instance.IdentScreenName().String())

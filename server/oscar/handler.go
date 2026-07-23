@@ -1134,12 +1134,26 @@ func (rt Handler) gateDeviceAuth(ctx context.Context, server uint16, instance *s
 		}
 	}
 
-	// The answer to the challenge must get through, and nothing else needs to:
+	// Two subgroups get through an unattested session, and nothing else does:
 	// subgroup granularity, not foodgroup. This once exempted all of
 	// wire.BENCOKeyDir, which let an unattested session fetch AND overwrite the
 	// identity-backup ciphertext — the one blob a removed device holding the
 	// password most wants, since it can be ground offline at leisure.
-	if inFrame.FoodGroup == wire.BENCOKeyDir && inFrame.SubGroup == wire.BENCOKeyDirAttestResponse {
+	//
+	//   - AttestResponse, so the session can prove itself.
+	//   - PublishRequest, so a device that is LINKING — signed in, challenged,
+	//     but not yet in the manifest — can publish the manifest that enrols it,
+	//     then attest. Without this a linking device is locked out of the one
+	//     operation that would let it in: it cannot attest (not yet enrolled) and
+	//     cannot publish to become enrolled, a deadlock that made enforce
+	//     unusable. This is safe because PublishManifest refuses anything but a
+	//     manifest signed by the account's identity key with a monotonic counter
+	//     — which a password-only or removed-device attacker cannot produce — so
+	//     opening it to an unattested session grants nothing an attacker can use.
+	//     Backup get/put stay gated: those are exactly what must not leak.
+	if inFrame.FoodGroup == wire.BENCOKeyDir &&
+		(inFrame.SubGroup == wire.BENCOKeyDirAttestResponse ||
+			inFrame.SubGroup == wire.BENCOKeyDirPublishRequest) {
 		return false, nil
 	}
 
