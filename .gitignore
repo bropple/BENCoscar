@@ -25,3 +25,6 @@ DEPLOYMENT.local.md
 scratch/
 *.local
 *.db-journal
+
+# Compiled admin CLI, built into the repo root during local work
+/benco_admin
