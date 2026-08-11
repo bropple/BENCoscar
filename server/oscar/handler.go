@@ -942,7 +942,7 @@ func (rt Handler) OServiceClientOnline(ctx context.Context, service uint16, inst
 	// zero-valued Handler used throughout the existing tests working.
 	if service == wire.BOS && rt.DeviceAuthMode != foodgroup.DeviceAuthOff &&
 		instance != nil && !instance.Attested() && len(instance.AttestNonce()) > 0 {
-		if msg, nonce, ok := rt.BENCOKeyDirService.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName()); ok {
+		if msg, nonce, ok := rt.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName()); ok {
 			instance.SetAttestNonce(nonce)
 			rt.Logger.InfoContext(ctx, "re-issued the device challenge at sign-on",
 				"screen_name", instance.IdentScreenName().String())
@@ -1116,7 +1116,7 @@ func (rt Handler) gateDeviceAuth(ctx context.Context, server uint16, instance *s
 	// and the session is marked attested rather than special-cased below, so
 	// that every later check reads the same state the bootstrap rule produced.
 	if len(instance.AttestNonce()) == 0 {
-		msg, nonce, ok := rt.BENCOKeyDirService.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName())
+		msg, nonce, ok := rt.Challenge(ctx, rt.DeviceAuthMode, instance.IdentScreenName())
 		if !ok {
 			instance.SetAttested()
 			return false, nil

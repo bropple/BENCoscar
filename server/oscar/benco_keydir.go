@@ -40,7 +40,7 @@ func (rt Handler) BENCOKeyDirAttestResponse(ctx context.Context, instance *state
 	if err := wire.UnmarshalBE(&inBody, r); err != nil {
 		return err
 	}
-	outSNAC, err := rt.BENCOKeyDirService.AttestResponse(ctx, instance, inFrame, inBody)
+	outSNAC, err := rt.AttestResponse(ctx, instance, inFrame, inBody)
 	if err != nil {
 		return err
 	}
