@@ -41,11 +41,27 @@ CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
     -X main.date=$DATE" \
   -o "$BIN" ./cmd/server
 
-say "Built $BIN"
-ls -lh "$BIN"
+# The admin CLI ships beside the server: install.sh picks up
+# benco_admin-<os>-<arch> from next to itself, and deploy.sh --binaries expects
+# it. It talks to the management API, whose shape moves with the server, so a
+# stale one is a real source of confusion.
+ADMIN_BIN="$OUT_DIR/benco_admin-$GOOS-$GOARCH"
+CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build \
+  -trimpath \
+  -ldflags "-s -w \
+    -X main.version=$VERSION \
+    -X main.commit=$COMMIT \
+    -X main.date=$DATE" \
+  -o "$ADMIN_BIN" ./cmd/benco_admin
+
+say "Built $BIN and $ADMIN_BIN ($(go env GOVERSION))"
+ls -lh "$BIN" "$ADMIN_BIN"
 echo
-echo "Next:"
-echo "    scp $BIN <vps>:~/bencoscar"
+echo "Next — to upgrade an existing install, push.sh does all of this:"
+echo "    ./scripts/benco-deploy/push.sh <ssh-host>"
+echo
+echo "First install by hand:"
+echo "    scp $BIN $ADMIN_BIN <vps>:~/"
 echo "    scp scripts/benco-deploy/install.sh scripts/benco-deploy/letsencrypt.sh <vps>:~/"
 echo "    ssh <vps>"
 echo "    sudo HOSTNAME_FQDN=chat.example.com ./install.sh"

@@ -1,7 +1,14 @@
 # Deploying BENCoscar
 
-Install once from a workstation. After that, deploys run **on the server**:
-`deploy.sh` pulls, builds and rolls the service over in one command.
+Install once from a workstation. After that, a deploy is one command, from
+either end:
+
+- **`push.sh HOST`** on a workstation builds here and deploys over SSH. The
+  server needs no Go toolchain and no checkout.
+- **`sudo ./deploy.sh`** on the server pulls, builds there, and rolls over.
+
+Both finish in the same `deploy.sh` code, which handles the rollback copy, the
+health check and automatic rollback.
 
 **No hostname is baked into any of them** — this repo is public, and the server
 address is a deployment detail. The install scripts require `HOSTNAME_FQDN` and
@@ -24,12 +31,20 @@ Then create an account and point a client at it.
 
 ## Every deploy after that
 
+From a workstation, with an `~/.ssh/config` alias for the server:
+
 ```bash
-# on the server
+./scripts/benco-deploy/push.sh benco             # benco = your ssh alias
+./scripts/benco-deploy/push.sh benco --dry-run   # build, upload, show the steps
+```
+
+See [`push.sh`](#pushsh) below. Or, on the server itself:
+
+```bash
 sudo ./deploy.sh
 ```
 
-That is the whole thing. It clones the public repo (HTTPS, no credentials) to
+That clones the public repo (HTTPS, no credentials) to
 `/opt/bencoscar/src` on first run and fetches after that, builds both binaries,
 and swaps them in with a health check and automatic rollback. See
 [`deploy.sh`](#deploysh) below.
@@ -126,10 +141,42 @@ sudo systemctl start bencoscar
 One generation is kept — each deploy overwrites `.prev`. For anything older,
 check out the commit in `/opt/bencoscar/src` and deploy that.
 
+### `push.sh`
+
+**Build here, deploy there.** Runs on a workstation, from the checkout:
+
+```bash
+./scripts/benco-deploy/push.sh HOST [--dry-run] [--yes] [--force] [--allow-dirty]
+```
+
+`HOST` is any ssh destination. Use a `~/.ssh/config` alias that carries the
+user and key, so the address stays out of the repo. It is required and has no
+default.
+
+1. Refuses a dirty tree (`--allow-dirty` overrides). The commit is stamped into
+   the binary and the health check matches on it, so an uncommitted build would
+   pass while claiming to be something it is not. It warns when `HEAD` is not on
+   any remote branch.
+2. Asks the server for `uname -m` and cross-compiles both binaries for it with
+   `build.sh`, pinned to **exactly** the Go version in `go.mod`
+   (`GOTOOLCHAIN=go<that>`). That is the version CI tests and govulncheck
+   scans. A workstation's newer default toolchain is neither, and has carried
+   unpatched stdlib vulnerabilities of its own.
+3. Uploads both binaries and `deploy.sh` to a fresh `0700` directory in the
+   remote user's home (not `/tmp`, which may be `noexec`).
+4. Runs `sudo deploy.sh --binaries <dir> --commit <sha>` over `ssh -t`, so sudo
+   and the confirmation prompt can reach you.
+5. Removes the remote directory whether or not the deploy succeeded.
+
+`deploy.sh --binaries DIR --commit SHA` is the server half. It skips the fetch,
+dirty-checkout check and build. It refuses if the uploaded server binary does
+not report `SHA`, and exits early if the installed one already does (`--force`
+overrides). Everything else is the same code.
+
 ### `build.sh`
 
-Cross-compiles a static binary. Defaults to `linux/arm64`; override with
-`GOOS`/`GOARCH`. Cross-compiling needs no toolchain because the SQLite driver is
+Cross-compiles static `bencoscar-<os>-<arch>` and `benco_admin-<os>-<arch>`
+into `dist/`. Defaults to `linux/arm64`; override with `GOOS`/`GOARCH`. Cross-compiling needs no toolchain because the SQLite driver is
 pure Go and CGO stays off.
 
 Still the route for the first install, and the alternative for **a server you do

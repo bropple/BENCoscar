@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
 # deploy.sh — pull, build and roll over BENCoscar, ON THE SERVER.
 #
-# This replaces the cross-compile-then-scp dance: the server fetches the public
-# repository over HTTPS, builds both binaries itself, and swaps them in. No
-# credentials are needed anywhere — the repo is public and read-only here.
+# The server fetches the public repository over HTTPS, builds both binaries
+# itself, and swaps them in. No credentials are needed anywhere — the repo is
+# public and read-only here.
+#
+# Or, with --binaries, it skips the fetch and build and installs binaries that
+# were built elsewhere. That is how push.sh drives it from a workstation, so a
+# server needs no Go toolchain and no checkout at all. Everything from the
+# architecture check onward (rollback copy, health check, automatic rollback)
+# is the same code either way.
 #
 #   sudo ./deploy.sh
 #   sudo ./deploy.sh --branch main
 #   sudo ./deploy.sh --dry-run
+#   sudo ./deploy.sh --binaries DIR --commit SHA     (normally via push.sh)
 #
+#   --binaries DIR  install DIR/bencoscar and DIR/benco_admin instead of
+#                   building; needs --commit
+#   --commit SHA    the short commit those binaries were built from; the
+#                   health check requires the running server to report it
 #   --branch NAME   branch to deploy (default benco)
 #   --src PATH      source checkout (default /opt/<service>/src)
 #   --service NAME  systemd unit (default bencoscar, else ras if that is what
@@ -60,6 +71,8 @@ ADMIN_BIN_DST="${ADMIN_BIN_DST:-/usr/local/bin/benco_admin}"
 DRY_RUN=0
 ASSUME_YES=0
 FORCE=0
+BIN_DIR=""
+EXPECT_COMMIT=""
 
 say()  { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;33m[!]\033[0m %s\n' "$*"; }
@@ -71,10 +84,12 @@ while [ $# -gt 0 ]; do
     --branch)  shift; BRANCH="${1:-}";  [ -n "$BRANCH" ]  || die "--branch needs a name" ;;
     --src)     shift; SRC_DIR="${1:-}"; [ -n "$SRC_DIR" ] || die "--src needs a path" ;;
     --service) shift; SERVICE="${1:-}"; [ -n "$SERVICE" ] || die "--service needs a name" ;;
+    --binaries) shift; BIN_DIR="${1:-}"; [ -n "$BIN_DIR" ] || die "--binaries needs a directory" ;;
+    --commit)  shift; EXPECT_COMMIT="${1:-}"; [ -n "$EXPECT_COMMIT" ] || die "--commit needs a SHA" ;;
     --force)   FORCE=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --yes|-y)  ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)         die "unknown option: $1  (try --help)" ;;
   esac
   shift
@@ -90,6 +105,16 @@ fi
 
 # --- 1. Prerequisites ------------------------------------------------------
 command -v systemctl >/dev/null 2>&1 || die "This expects systemd. Nothing here knows how to roll over any other init."
+if [ -n "$BIN_DIR" ]; then
+  # Built elsewhere: neither git nor Go is needed on this machine.
+  [ -d "$BIN_DIR" ] || die "--binaries: $BIN_DIR is not a directory"
+  [ -n "$EXPECT_COMMIT" ] || die "--binaries needs --commit SHA, so the health check can confirm the server is running what was just installed."
+  for f in bencoscar benco_admin; do
+    [ -f "$BIN_DIR/$f" ] || die "--binaries: $BIN_DIR/$f is missing"
+  done
+  GO_VER="(built elsewhere)"
+else
+# Not indented, to keep this block's diff readable against the source-build path.
 command -v git >/dev/null 2>&1 || die "git is not installed:  sudo apt-get install -y git"
 
 # The Go toolchain is NOT installed silently. It is a multi-hundred-megabyte
@@ -103,24 +128,29 @@ if ! command -v go >/dev/null 2>&1; then
     x86_64|amd64)  GOARCH_HINT=amd64 ;;
     *)             GOARCH_HINT="$ARCH" ;;
   esac
+  # Taken from go.mod when a checkout exists, so this hint cannot go stale.
+  GO_HINT="$(sed -n 's/^go \([0-9][0-9.]*\).*/\1/p' "${SRC_DIR:-/opt/bencoscar/src}/go.mod" 2>/dev/null | head -n1 || true)"
+  GO_HINT="${GO_HINT:-<version in go.mod>}"
   die "No Go toolchain found, and this script builds on the server.
 
      Distribution packages are usually too old for this module. Take it from
      upstream instead (linux/$GOARCH_HINT):
 
-         curl -fsSLO https://go.dev/dl/go1.26.5.linux-$GOARCH_HINT.tar.gz
+         curl -fsSLO https://go.dev/dl/go$GO_HINT.linux-$GOARCH_HINT.tar.gz
          sudo rm -rf /usr/local/go
-         sudo tar -C /usr/local -xzf go1.26.5.linux-$GOARCH_HINT.tar.gz
+         sudo tar -C /usr/local -xzf go$GO_HINT.linux-$GOARCH_HINT.tar.gz
          echo 'export PATH=\$PATH:/usr/local/go/bin' | sudo tee /etc/profile.d/go.sh
          export PATH=\$PATH:/usr/local/go/bin
 
      Check https://go.dev/dl/ for the current release. Then re-run this script.
 
-     If you would rather not put a toolchain on the server at all, the old route
-     still works: build.sh on a workstation, scp, install.sh."
+     If you would rather not put a toolchain on the server at all, run push.sh
+     on a workstation instead: it builds there and calls this script with
+     --binaries."
 fi
 
 GO_VER="$(go env GOVERSION 2>/dev/null | sed 's/^go//' || true)"
+fi
 
 # Checked against go.mod rather than against a number written down here, so this
 # script does not need editing every time the module moves forward. Called twice:
@@ -207,14 +237,30 @@ API_LISTENER="${API_LISTENER:-$(env_lookup API_LISTENER)}"
 
 say "BENCoscar deploy"
 echo "    service     : $SERVICE  (runs as $SVC_USER)"
+if [ -n "$BIN_DIR" ]; then
+echo "    binaries    : $BIN_DIR  (prebuilt, commit $EXPECT_COMMIT)"
+else
 echo "    repository  : $REPO_URL"
 echo "    branch      : $BRANCH"
 echo "    source      : $SRC_DIR"
+fi
 echo "    server bin  : $BIN_DST"
 echo "    admin CLI   : $ADMIN_BIN_DST"
 echo "    go          : ${GO_VER:-unknown}"
 echo "    mgmt API    : ${API_LISTENER:-<not found — health check will be reduced>}"
 
+if [ -n "$BIN_DIR" ]; then
+  # --- 3-5, prebuilt: nothing to fetch; is it already running? -------------
+  INSTALLED_COMMIT="$("$BIN_DST" --version 2>/dev/null | sed -n 's/^commit:[[:space:]]*//p' | head -n1 || true)"
+  if [ "$INSTALLED_COMMIT" = "$EXPECT_COMMIT" ] && [ "$FORCE" -eq 0 ]; then
+    say "$BIN_DST already reports commit $EXPECT_COMMIT — nothing to deploy."
+    echo "    Use --force to reinstall it anyway."
+    exit 0
+  fi
+  say "Shipping prebuilt binaries"
+  echo "    installed commit : ${INSTALLED_COMMIT:-(unknown)}"
+  echo "    new commit       : $EXPECT_COMMIT"
+else
 # --- 3. Fetch --------------------------------------------------------------
 if [ -d "$SRC_DIR/.git" ]; then
   say "Updating $SRC_DIR"
@@ -304,13 +350,20 @@ else
     echo "     see the header of this script."
   fi
 fi
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
+  if [ -n "$BIN_DIR" ]; then
+    STEPS_HEAD="      1. (prebuilt) use $BIN_DIR/bencoscar and $BIN_DIR/benco_admin
+      2. (prebuilt) require the server binary to report commit $EXPECT_COMMIT"
+  else
+    STEPS_HEAD="      1. git -C $SRC_DIR checkout --detach $TARGET
+      2. build ./cmd/server and ./cmd/benco_admin into a temp directory"
+  fi
   cat <<EOF
 
     [dry run] Would then:
-      1. git -C $SRC_DIR checkout --detach $TARGET
-      2. build ./cmd/server and ./cmd/benco_admin into a temp directory
+$STEPS_HEAD
       3. verify both are executables for $(uname -m) and report their versions
       4. systemctl stop $SERVICE
       5. cp -a $BIN_DST $BIN_DST.prev   (rollback copy)
@@ -331,6 +384,16 @@ if [ "$ASSUME_YES" -ne 1 ]; then
   case "$reply" in y|Y|yes|YES) ;; *) die "cancelled — nothing was touched" ;; esac
 fi
 
+if [ -n "$BIN_DIR" ]; then
+  # --- 6, prebuilt: the "stage" is the uploaded directory ------------------
+  # Never removed here: push.sh owns it and cleans it up.
+  STAGE="$BIN_DIR"
+  COMMIT="$EXPECT_COMMIT"
+  FULL_COMMIT="$EXPECT_COMMIT"
+  chmod 0755 "$STAGE/bencoscar" "$STAGE/benco_admin"
+  SOURCE_DESC="prebuilt, uploaded to $BIN_DIR"
+else
+SOURCE_DESC="$SRC_DIR (detached at <commit>)"
 # --- 6. Check out and build to a temp path ---------------------------------
 # Detached, not a branch: this checkout is a build input, not somewhere to work.
 say "Checking out $TARGET"
@@ -365,6 +428,8 @@ echo "    into $STAGE — the live binaries are not touched until this succeeds"
 ( cd "$SRC_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
     -o "$STAGE/benco_admin" ./cmd/benco_admin ) \
   || die "benco_admin build failed. Nothing was changed; $SERVICE is still running the old binary."
+SOURCE_DESC="$SRC_DIR (detached at $COMMIT)"
+fi
 
 # --- 7. Verify the artifacts before they go anywhere near /usr/local -------
 # A binary for the wrong architecture installs perfectly and then fails at exec
@@ -401,6 +466,15 @@ say "Verifying artifacts"
 verify_binary "$STAGE/bencoscar" "server"
 verify_binary "$STAGE/benco_admin" "benco_admin"
 "$STAGE/bencoscar" --version 2>/dev/null | sed 's/^/    /' || true
+
+# A prebuilt binary must be the build it claims to be, or the health check below
+# would be comparing against the wrong commit and pass or fail for the wrong
+# reason. Checked before anything is stopped.
+if [ -n "$BIN_DIR" ]; then
+  GOT="$("$STAGE/bencoscar" --version 2>/dev/null | sed -n 's/^commit:[[:space:]]*//p' | head -n1 || true)"
+  [ "$GOT" = "$EXPECT_COMMIT" ] || die "The uploaded server binary reports commit '${GOT:-?}', not $EXPECT_COMMIT.
+     Nothing was changed; $SERVICE is still running the old binary."
+fi
 
 # --- 8. Swap ---------------------------------------------------------------
 say "Stopping $SERVICE"
@@ -539,6 +613,9 @@ else
 
   # The source tree stays on the new commit deliberately: leaving it there is
   # what makes the failure reproducible for whoever debugs it.
+  if [ -n "$BIN_DIR" ]; then
+    die "Deploy failed and was rolled back. The failed build was $COMMIT; reproduce it from that commit."
+  fi
   die "Deploy failed and was rolled back. Source is left at $COMMIT in $SRC_DIR for investigation."
 fi
 
@@ -551,7 +628,7 @@ $(printf '\033[1;32m==>\033[0m') Deployed.
   was        : $OLD_VERSION
   now        : $("$BIN_DST" --version 2>/dev/null | tr '\n' ' ' | sed 's/  */ /g')
   commit     : $FULL_COMMIT
-  source     : $SRC_DIR (detached at $COMMIT)
+  source     : $SOURCE_DESC
   binaries   : $BIN_DST
                $ADMIN_BIN_DST
 
